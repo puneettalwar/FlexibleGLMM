@@ -1,4 +1,4 @@
-**FlexibleGLMM**
+# FlexibleGLMM
 
 *** Warning! This Shiny App has not been validated enough! There is no warranty for the app! ***
 
@@ -7,7 +7,7 @@ https://puneet-talwar.shinyapps.io/FlexibleGLMM/
 
 **The current version of Flexible GLMM Shiny App can be used to**
 
-- fit GLMM models using afex and glmer R packages
+- fit Generalized Linear Mixed Model (GLMM) models using afex and glmer R packages
 - get results similar to SAS outputs
 - identify fit distribution family for the dependent variables
 - run analysis for a multiple dependent and independent variables simultaneously
@@ -22,7 +22,7 @@ https://puneet-talwar.shinyapps.io/FlexibleGLMM/
 - For family of distributions Refer- https://www.rdocumentation.org/packages/stats/versions/3.6.2/topics/family
 - Custom equation format : y ~ x1 + x2
 
-Note:
+**Note:**
 
 - Afex mixed - Refer to https://cran.r-project.org/web/packages/afex/afex.pdf
 - For using complex models use custom equation option.
