@@ -1,14 +1,18 @@
-Link to the Shiny App -
+**FlexibleGLMM**
+
+*** Warning! This Shiny App has not been validated enough! There is no warranty for the app! ***
+
+**Link to the Shiny App -**
 https://puneet-talwar.shinyapps.io/FlexibleGLMM/
 
-The current version of Flexible GLMM Shiny App can be used to
+**The current version of Flexible GLMM Shiny App can be used to**
 
 - fit GLMM models using afex and glmer R packages
 - get results similar to SAS outputs
 - identify fit distribution family for the dependent variables
 - run analysis for a multiple dependent and independent variables simultaneously
 
-Usage:
+**Usage:**
 
 - Data input format: xlsx or csv file with header row containing variable names.
 - By default first sheet will be used as the input. Ex. mtcars, sleepstudy (lme4)
