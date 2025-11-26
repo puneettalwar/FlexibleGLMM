@@ -1,3 +1,6 @@
+Link to the Shiny App -
+https://puneet-talwar.shinyapps.io/FlexibleGLMM/
+
 The current version of Flexible GLMM Shiny App can be used to
 
 - fit GLMM models using afex and glmer R packages
