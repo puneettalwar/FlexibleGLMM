@@ -9,6 +9,7 @@ library(lme4)
 library(emmeans)
 library(SuppDists)
 library(goft)
+library(parameters)
 
 # UI -----------------------------
 ui <- fluidPage(
@@ -461,19 +462,64 @@ server <- function(input, output, session) {
   output$emmeansOutput <- renderPrint({
     results <- runModels()
     ph_vars <- input$posthoc_vars
+    
     for (nm in names(results)) {
       cat("\n--- EMMs for:", nm, "---\n")
       res <- results[[nm]]
+      
       if (is.list(res) && length(ph_vars) > 0) {
+        
+        ## --- Main effects + pairwise contrasts ---
         for (fac in ph_vars) {
           cat("\nFactor:", fac, "\n")
-          print(emmeans(res$model, specs = fac))
+          
+          # EMMs
+          emmeans_model <- emmeans(res$model, specs = fac)
+          print(emmeans_model)
+          
+          # Pairwise contrasts
+          cat("\nPairwise contrasts for:", fac, "\n")
+          contrast_results <- contrast(emmeans_model, method = "pairwise")
+          print(summary(contrast_results))
         }
-      } else {
-        cat("No post-hoc factors selected or available.\n")
+        
+        ## --- Conditional pairwise comparisons for ALL combinations ---
+        ## --- Conditional pairwise comparisons for ALL combinations ---
+        if (length(ph_vars) >= 2) {
+          combs <- combn(ph_vars, 2, simplify = FALSE)
+          
+          for (pair in combs) {
+            facA <- pair[1]
+            facB <- pair[2]
+            
+            ## A | B
+            cat(
+              "\nConditional pairwise comparisons (",
+              facA, " | ", facB, "):\n", sep = ""
+            )
+            
+            form1 <- as.formula(paste("pairwise ~", facA, "|", facB))
+            pw1 <- emmeans(res$model, form1)
+            print(pw1)
+            
+            ## B | A
+            cat(
+              "\nConditional pairwise comparisons (",
+              facB, " | ", facA, "):\n", sep = ""
+            )
+            
+            form2 <- as.formula(paste("pairwise ~", facB, "|", facA))
+            pw2 <- emmeans(res$model, form2)
+            print(pw2)
+          }
+        }
+        } else {
+          cat("No post-hoc factors selected or available.\n")
+        }
       }
-    }
-  })
+    })
+  
+  
   
   # # ------------------------------------------------------------------
   # # Distribution fitting that runs ONLY for the selected dependent variable
