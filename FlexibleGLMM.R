@@ -1,3 +1,15 @@
+#**************************************************************
+# by Puneet Talwar
+# Dec 2025
+
+# R 4.1.3
+#**************************************************************
+# A shiny app to fit GLMM models using afex and glmer packages.
+# It provides results similar to SAS outputs.
+# It provides diagnostic plots and posthoc options
+#**************************************************************
+
+
 # Load libraries
 library(shiny)
 library(readr)
