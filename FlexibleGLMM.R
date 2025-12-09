@@ -9,6 +9,7 @@
 # It provides diagnostic plots and post-hoc comparisons
 #**************************************************************
 
+options(width = 200)
 options(shiny.maxRequestSize=30*1024^2) # Maximum upload file size 30 MB
 
 # Load libraries
