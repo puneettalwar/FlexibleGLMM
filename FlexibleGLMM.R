@@ -6,9 +6,10 @@
 #**************************************************************
 # A shiny app to fit GLMM models using afex and glmer packages.
 # It provides results similar to SAS outputs.
-# It provides diagnostic plots and posthoc options
+# It provides diagnostic plots and post-hoc comparisons
 #**************************************************************
 
+options(shiny.maxRequestSize=30*1024^2) # Maximum upload file size 30 MB
 
 # Load libraries
 library(shiny)
