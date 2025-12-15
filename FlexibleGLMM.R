@@ -24,6 +24,11 @@ library(emmeans)
 library(SuppDists)
 library(goft)
 library(parameters)
+library(modelsummary)
+library(mctest)
+library(dataPreparation)
+library(gtsummary)
+library(ggplot2)
 
 # UI -----------------------------
 ui <- fluidPage(
@@ -64,6 +69,7 @@ ui <- fluidPage(
       numericInput("n_sigmas", "SD cutoff for Outlier Removal (leave empty to skip)", value = NA, min = 1),
       actionButton("remove_outliers", "Remove Outliers"),
       verbatimTextOutput("dimAfterOutlierRemoval"),
+      downloadButton("download_no_outliers", "Download Cleaned CSV"),
       hr(),
       p("Multiple y and x inputs are allowed"),
       uiOutput("yInput"),
@@ -158,7 +164,19 @@ ui <- fluidPage(
         ),        
         tabPanel("Model Output", verbatimTextOutput("modelOutput")),
         tabPanel("ANOVA", verbatimTextOutput("anovaOutput")),
-        tabPanel("Post-hoc (EMMs)", verbatimTextOutput("emmeansOutput"))
+        tabPanel("Post-hoc (EMMs)", verbatimTextOutput("emmeansOutput")),
+        tabPanel("Summary Plots",
+                 h4("Boxplots with Pairwise t-tests"),
+                 uiOutput("boxplot_var_selector"),
+                 plotOutput("boxplot_output"),
+                 verbatimTextOutput("t_test_output"),
+                 hr(),
+                 h4("Spearman Correlation Plots"),
+                 uiOutput("corr_iv_selector"),
+                 plotOutput("corr_plot"),
+                 verbatimTextOutput("corr_stats"),
+                 downloadButton("download_corr_plot", "Download Correlation Plot")
+        )
        )
       )
     )
@@ -263,6 +281,17 @@ server <- function(input, output, session) {
       })
     }
   })
+  
+  
+  output$download_no_outliers <- downloadHandler(
+    filename = function() {
+      paste0("cleaned_no_outliers_", Sys.Date(), ".csv")
+    },
+    content = function(file) {
+      req(rv$data_no_outliers)   # ensure data exists
+      write.csv(rv$data_no_outliers, file, row.names = FALSE)
+    }
+  )
   
   # Inputs
   observe({
@@ -434,11 +463,10 @@ server <- function(input, output, session) {
     results
 })
   
-  
   # Outputs
   output$dataTable <- renderDT({
-    req(rv$selected_data)
-    datatable(rv$selected_data, options = list(scrollX = TRUE, pageLength = 15))
+    req(rv$data)
+    datatable(rv$data, options = list(scrollX = TRUE, pageLength = 25))
   })
   
   output$modelOutput <- renderPrint({
@@ -600,8 +628,70 @@ server <- function(input, output, session) {
     
   })
   
+  output$boxplot_var_selector <- renderUI({
+    df <- rv$selected_data
+    req(df)
+    selectInput("boxplot_cats", "Select Categorical IV:",
+                choices = names(df)[sapply(df, is.factor)])
+  })
   
+  output$boxplot_output <- renderPlot({
+    req(input$y, input$boxplot_cats)
+    df <- rv$selected_data
+    ggplot(df, aes_string(x = input$boxplot_cats, y = input$y)) +
+      geom_boxplot(fill = "lightblue") +
+      theme_bw() +
+      labs(title = paste("Boxplot of", input$y, "by", input$boxplot_cats))
+  })
   
+  output$t_test_output <- renderPrint({
+    req(input$y, input$boxplot_cats)
+    df <- rv$selected_data
+    pairwise.t.test(df[[input$y]], df[[input$boxplot_cats]], p.adjust.method = "none")
+  })
+  
+  output$corr_iv_selector <- renderUI({
+    df <- rv$selected_data
+    req(df)
+    selectInput("corr_iv", "Select Numeric IV:",
+                choices = names(df)[sapply(df, is.numeric)])
+  })
+  
+  corr_plot_reactive <- reactive({
+    req(input$y, input$corr_iv)
+    df <- rv$selected_data
+    ggplot(df, aes_string(x = input$corr_iv, y = input$y)) + 
+      geom_point() +
+      geom_smooth(method = "lm", se = TRUE) +
+      theme_bw() +
+      labs(title = paste("Spearman Correlation:", input$y, "vs", input$corr_iv))
+  })
+  output$corr_plot <- renderPlot({ corr_plot_reactive() })
+  
+  output$corr_stats <- renderPrint({
+    req(input$y, input$corr_iv)
+    df <- rv$selected_data
+    
+    sp <- cor.test(df[[input$corr_iv]], df[[input$y]], method = "spearman")
+    
+    reg <- summary(lm(df[[input$y]] ~ df[[input$corr_iv]]))
+    
+    list(
+      Spearman = sp,
+      Regression = reg$coefficients
+    )
+  })
+  
+  output$download_corr_plot <- downloadHandler(
+    filename = function() {
+      paste0("correlation_plot_", input$y, "_", input$corr_iv, ".png")
+    },
+    content = function(file) {
+      ggsave(file, corr_plot_reactive())
+    }
+  )
+  
+
   output$dist_descriptive <- renderPlot({
     req(rv$dist_fits, input$y)
     
