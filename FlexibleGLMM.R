@@ -55,8 +55,9 @@ ui <- fluidPage(
                                "None" = "none"),
                    selected = "center_scale"),
       actionButton("apply_var_types", "Apply Variable Types"),
-      hr(),
       
+      actionButton("open_data_view", "View Processed Data"),
+      hr(),
       radioButtons("missing_value", "Missing Value Treatment", 
                    choices = c("Remove rows with NA" = "NA"),
                    selected = "NA"),
@@ -230,31 +231,65 @@ server <- function(input, output, session) {
                 choices = names(rv$selected_data), multiple = TRUE)
   })
   
-  # Apply types and correct centering/scaling
+  # # Apply types and correct centering/scaling
+  # observeEvent(input$apply_var_types, {
+  #   req(rv$selected_data)
+  #   df <- rv$selected_data
+  #   if (!is.null(input$factor_vars)) {
+  #     for (v in input$factor_vars) {
+  #       df[[v]] <- as.factor(df[[v]])
+  #     }
+  #   }
+  #   if (!is.null(input$numeric_vars)) {
+  #     for (v in input$numeric_vars) {
+  #       df[[v]] <- suppressWarnings(as.numeric(df[[v]]))
+  #       if (input$center_scale_mode == "center_scale") {
+  #         df[[v]] <- as.numeric(scale(df[[v]], center = TRUE, scale = TRUE))
+  #       } else if (input$center_scale_mode == "center_only") {
+  #         df[[v]] <- df[[v]] - mean(df[[v]], na.rm = TRUE)
+  #       } else if (input$center_scale_mode == "scale_only") {
+  #         df[[v]] <- df[[v]] / sd(df[[v]], na.rm = TRUE)
+  #       }
+  #     }
+  #   }
+  #   rv$selected_data <- df
+  #   showNotification('Variable types & preprocessing applied', type = 'message')
+  # })
+  
+  
   observeEvent(input$apply_var_types, {
     req(rv$selected_data)
     df <- rv$selected_data
+
+    # Factors
     if (!is.null(input$factor_vars)) {
-      for (v in input$factor_vars) {
-        df[[v]] <- as.factor(df[[v]])
-      }
+      for (v in input$factor_vars) df[[v]] <- as.factor(df[[v]])
     }
+
+    # Numeric
     if (!is.null(input$numeric_vars)) {
       for (v in input$numeric_vars) {
         df[[v]] <- suppressWarnings(as.numeric(df[[v]]))
+
         if (input$center_scale_mode == "center_scale") {
-          df[[v]] <- as.numeric(scale(df[[v]], center = TRUE, scale = TRUE))
-        } else if (input$center_scale_mode == "center_only") {
-          df[[v]] <- df[[v]] - mean(df[[v]], na.rm = TRUE)
-        } else if (input$center_scale_mode == "scale_only") {
-          df[[v]] <- df[[v]] / sd(df[[v]], na.rm = TRUE)
+          df[[paste0(v, "_cs")]] <- as.numeric(scale(df[[v]], center = TRUE, scale = TRUE))
+        }
+        else if (input$center_scale_mode == "center_only") {
+          df[[paste0(v, "_c")]] <- df[[v]] - mean(df[[v]], na.rm = TRUE)
+        }
+        else if (input$center_scale_mode == "scale_only") {
+          df[[paste0(v, "_s")]] <- df[[v]] / sd(df[[v]], na.rm = TRUE)
         }
       }
     }
+
+    rv$processed_data <- df      # <-- store the augmented data
     rv$selected_data <- df
-    showNotification('Variable types & preprocessing applied', type = 'message')
+
+    showNotification("Variable types & preprocessing applied", type = "message")
   })
   
+
   # Remove missing values
   observeEvent(input$remove_missing, {
     df <- rv$selected_data
@@ -468,6 +503,40 @@ server <- function(input, output, session) {
     req(rv$data)
     datatable(rv$data, options = list(scrollX = TRUE, pageLength = 25))
   })
+  
+  
+  observeEvent(input$open_data_view, {
+    req(rv$selected_data)
+    rv$processed_data    
+    
+    showModal(modalDialog(
+      title = "Processed Data",
+      size = "l",
+      easyClose = TRUE,
+      DT::DTOutput("processed_table"),
+      footer = modalButton("Close")
+    ))
+  })
+
+  output$processed_table <- DT::renderDT({
+    rv$processed_data    
+  })
+  
+  output$processed_table <- DT::renderDT({
+    DT::datatable(
+      rv$processed_data,
+      options = list(
+        pageLength = 25,
+        scrollX = TRUE,
+        scrollY = "500px",
+        lengthMenu = c(10,25,50,100),
+        paging = TRUE
+      ),
+      class = "display nowrap"
+    )
+  })
+  
+  #datatable(df, options = list(scrollX = TRUE, pageLength = 20))
   
   output$modelOutput <- renderPrint({
     results <- runModels()
