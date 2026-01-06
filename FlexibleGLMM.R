@@ -29,6 +29,9 @@ library(mctest)
 library(dataPreparation)
 library(gtsummary)
 library(ggplot2)
+library(nlme)
+library(knitr)
+library(sjPlot)
 
 # UI -----------------------------
 ui <- fluidPage(
@@ -90,19 +93,41 @@ ui <- fluidPage(
                    selected = "none"),
       hr(),
       uiOutput("covariatesInput"),
+      
       selectInput("family", "GLMM Family", 
                   choices = c("gaussian","gamma","beta","binomial","poisson"), 
                   selected = "gaussian"),
+      
       selectInput("linkfun", "Link Function",
                   choices = c("default",
                               "identity","log","logit","probit","cloglog",
                               "sqrt","inverse"),
                   selected = "default"),
+      
       selectInput("engine", "Modeling Engine",
-                  choices = c("afex::mixed", "lme4::glmer"),
+                  choices = c("afex::mixed","lme4::glmer","nlme::lme"),
                   selected = "afex::mixed"),
-      textInput("random_effects", "Random Effects Formula",
-                value = "(1|Subj)"),
+     
+      selectInput("corStruct","Correlation structure (nlme)",
+                  choices = c(
+                    "None" = "none",
+                    "Auto (recommended)" = "auto",
+                    "AR(1)" = "corAR1",
+                    "Compound Symmetry" = "corCompSymm",
+                    "Unstructured (Symmetric)" = "corSymm",
+                    "Exponential"="corExp"
+                  )),
+      
+      textInput("random_effects",
+                "Random Effects (lme4 / afex syntax)",
+                value = "(1|Subject)"),
+      
+      textInput("nlme_random",
+                "Random Effects (nlme syntax)",
+                value = "~1|Subject"),
+      
+      textInput("group_var","Random Grouping variable for correlation (e.g., Subject)"),
+      textInput("time_var","Time variable for AR structures (e.g., Time)"),
       hr(),
       
       uiOutput("posthoc_vars_ui"),
@@ -165,6 +190,10 @@ ui <- fluidPage(
         ),        
         tabPanel("Model Output", verbatimTextOutput("modelOutput")),
         tabPanel("ANOVA", verbatimTextOutput("anovaOutput")),
+        tabPanel(
+          "Summary Table",
+          uiOutput("summary_tables_ui")
+        ),
         tabPanel("Post-hoc (EMMs)", verbatimTextOutput("emmeansOutput")),
         tabPanel("Summary Plots",
                  h4("Boxplots with Pairwise t-tests"),
@@ -178,10 +207,10 @@ ui <- fluidPage(
                  verbatimTextOutput("corr_stats"),
                  downloadButton("download_corr_plot", "Download Correlation Plot")
         )
-       )
       )
     )
   )
+)
 
 
 # SERVER -------------------------
@@ -231,46 +260,20 @@ server <- function(input, output, session) {
                 choices = names(rv$selected_data), multiple = TRUE)
   })
   
-  # # Apply types and correct centering/scaling
-  # observeEvent(input$apply_var_types, {
-  #   req(rv$selected_data)
-  #   df <- rv$selected_data
-  #   if (!is.null(input$factor_vars)) {
-  #     for (v in input$factor_vars) {
-  #       df[[v]] <- as.factor(df[[v]])
-  #     }
-  #   }
-  #   if (!is.null(input$numeric_vars)) {
-  #     for (v in input$numeric_vars) {
-  #       df[[v]] <- suppressWarnings(as.numeric(df[[v]]))
-  #       if (input$center_scale_mode == "center_scale") {
-  #         df[[v]] <- as.numeric(scale(df[[v]], center = TRUE, scale = TRUE))
-  #       } else if (input$center_scale_mode == "center_only") {
-  #         df[[v]] <- df[[v]] - mean(df[[v]], na.rm = TRUE)
-  #       } else if (input$center_scale_mode == "scale_only") {
-  #         df[[v]] <- df[[v]] / sd(df[[v]], na.rm = TRUE)
-  #       }
-  #     }
-  #   }
-  #   rv$selected_data <- df
-  #   showNotification('Variable types & preprocessing applied', type = 'message')
-  # })
-  
-  
   observeEvent(input$apply_var_types, {
     req(rv$selected_data)
     df <- rv$selected_data
-
+    
     # Factors
     if (!is.null(input$factor_vars)) {
       for (v in input$factor_vars) df[[v]] <- as.factor(df[[v]])
     }
-
+    
     # Numeric
     if (!is.null(input$numeric_vars)) {
       for (v in input$numeric_vars) {
         df[[v]] <- suppressWarnings(as.numeric(df[[v]]))
-
+        
         if (input$center_scale_mode == "center_scale") {
           df[[paste0(v, "_cs")]] <- as.numeric(scale(df[[v]], center = TRUE, scale = TRUE))
         }
@@ -282,14 +285,14 @@ server <- function(input, output, session) {
         }
       }
     }
-
+    
     rv$processed_data <- df      # <-- store the augmented data
     rv$selected_data <- df
-
+    
     showNotification("Variable types & preprocessing applied", type = "message")
   })
   
-
+  
   # Remove missing values
   observeEvent(input$remove_missing, {
     df <- rv$selected_data
@@ -316,7 +319,6 @@ server <- function(input, output, session) {
       })
     }
   })
-  
   
   output$download_no_outliers <- downloadHandler(
     filename = function() {
@@ -354,6 +356,79 @@ server <- function(input, output, session) {
     })
   })
   
+
+  
+  # -------------------------------
+  # nlme helpers (FINAL)
+  # -------------------------------
+  
+  prepare_nlme_data <- function(df, subject_var) {
+    df[[subject_var]] <- as.factor(df[[subject_var]])
+    df <- df[order(df[[subject_var]]), ]
+    
+    # SAFE trial index
+    df$.trial_index <- ave(seq_len(nrow(df)), df[[subject_var]], FUN = seq_along
+    )
+    df
+  }
+  
+  nlme_can_use_correlation <- function(df, subject_var) {
+    grp_sizes <- table(df[[subject_var]])
+    sum(grp_sizes >= 2) >= 2
+  }
+  
+  suggest_correlation_structure <- function(df, subject_var, time_var = NULL) {
+    
+    if (!nlme_can_use_correlation(df, subject_var)) {
+      return("none")
+    }
+    
+    # If an explicit time variable exists → prefer AR(1)
+    if (nzchar(time_var) && time_var %in% names(df)) {
+      return("corAR1")
+    }
+    
+    # Otherwise default to CS
+    return("corCompSymm")
+  }
+  
+  get_nlme_corStruct <- function(type, groupvar, timevar) {
+    
+    if (type == "none" || !nzchar(type)) {
+      return(NULL)
+    }
+    
+    switch(
+      type,
+      
+      # AR(1): ordered within-subject
+      corAR1 = corAR1(
+        form = as.formula(paste("~ .trial_index |", groupvar))
+      ),
+      
+      # Compound symmetry: no ordering needed
+      corCompSymm = corCompSymm(
+        form = as.formula(paste("~ 1 |", groupvar))
+      ),
+      
+      # Unstructured symmetric (requires ordering!)
+      corSymm = corSymm(
+        form = as.formula(paste("~ .trial_index |", groupvar))
+      ),
+      
+      # Optional: exponential (continuous time)
+      corExp = corExp(
+        form = as.formula(paste("~", timevar, "|", groupvar))
+      ),
+      
+      NULL
+    )
+  }
+  
+  strip_lme4_random <- function(formula_string) {
+    gsub("\\+?\\s*\\([^\\)]*\\|[^\\)]*\\)", "", formula_string)
+  }
+  
   # Run models
   runModels <- eventReactive(input$run, {
     #req(rv$selected_data, input$y, input$x, input$random_effects)
@@ -361,17 +436,24 @@ server <- function(input, output, session) {
     df <- if (!is.null(rv$data_no_outliers)) rv$data_no_outliers else 
       if (!is.null(rv$cleaned_data)) rv$cleaned_data else rv$selected_data
     
-    # y <- input$y
-    # x_vars <- input$x
-    # covs <- input$covariates
-    # inters <- input$interaction_vars
-    # rand_terms <- input$random_effects
-    # family <- switch(input$family,
-    #                  "gaussian" = gaussian,
-    #                  "gamma" = gamma,
-    #                  #"beta" = beta,
-    #                  "binomial" = binomial,
-    #                  "poisson"  = poisson)
+    # --------------------------------
+    # nlme preprocessing
+    # --------------------------------
+    
+    if (input$engine == "nlme::lme") {
+      
+      req(input$group_var)  # e.g., "Subject"
+      
+      df <- prepare_nlme_data(df, input$group_var)
+      
+      can_use_corr <- nlme_can_use_correlation(df, input$group_var)
+      
+      suggested_corr <- suggest_correlation_structure(
+        df,
+        subject_var = input$group_var,
+        time_var = input$time_var  # optional UI input
+      )
+    }
     
     # Family + link function builder
     get_family <- function(fam, linkfun) {
@@ -398,7 +480,6 @@ server <- function(input, output, session) {
     
     family <- get_family(input$family, input$linkfun)
     
-    
     custom_eq <- trimws(input$custom_eq)
     #mode <- input$interaction_mode
     
@@ -419,8 +500,8 @@ server <- function(input, output, session) {
             anova_tab <- anova(model, ddf = "Kenward-Roger", type = 3)
           } else {
             model <- mixed(f, data = df, family = family, method = "LRT")
-                           # ,control = lmerControl(optCtrl = list(maxfun = 1e6)), 
-                           # expand_re = TRUE)
+            # ,control = lmerControl(optCtrl = list(maxfun = 1e6)), 
+            # expand_re = TRUE)
             anova_tab <- anova(model)
           }
         } else if (input$engine == "lme4::glmer") {
@@ -428,7 +509,63 @@ server <- function(input, output, session) {
                          control = glmerControl(optimizer = "bobyqa",
                                                 optCtrl = list(maxfun = 2e5)))
           anova_tab <- anova(model)
+        } else if (input$engine == "nlme::lme") {
+          
+          if (input$family != "gaussian")
+            stop("nlme::lme only supports Gaussian models.")
+          
+          df <- prepare_nlme_data(df, input$group_var)
+          
+          can_use_corr <- nlme_can_use_correlation(df, input$group_var)
+          
+          suggested_corr <- suggest_correlation_structure(
+            df,
+            subject_var = input$group_var,
+            time_var = input$time_var
+          )
+          
+          # USER CHOICE TAKES PRIORITY
+          cor_choice <- input$corStruct
+          if (cor_choice == "auto") cor_choice <- suggested_corr
+          
+          correlation <- NULL
+          corr_used <- "none"
+          
+          if (can_use_corr && cor_choice != "none") {
+            correlation <- get_nlme_corStruct(
+              cor_choice,
+              input$group_var,
+              input$time_var
+            )
+            corr_used <- cor_choice
+          }
+          
+          if (!can_use_corr && cor_choice != "none") {
+            showNotification(
+              "Residual correlation disabled: insufficient repeated measures.",
+              type = "warning"
+            )
+          }
+          
+          showNotification(
+            paste("Correlation used:", corr_used),
+            type = "message",
+            duration = 4
+          )
+          
+          fixed_str <- strip_lme4_random(f_str)
+          
+          model <- nlme::lme(
+            fixed = as.formula(fixed_str),
+            random = as.formula(paste0("~1|", input$group_var)),
+            correlation = correlation,
+            data = df,
+            method = "REML"
+          )
+          
+          anova_tab <- anova(model)
         }
+        
         results[[custom_eq]] <- list(formula = f_str, model = model, anova = anova_tab)
       }, error = function(e) {
         results[[custom_eq]] <- list(formula = f_str, error = e$message)
@@ -481,12 +618,69 @@ server <- function(input, output, session) {
               model <- mixed(f, data = df, family = base_family, method = "LRT")
               anova_tab <- anova(model)
             }
-          } else if (input$engine == "lme4::glmer") {
+          } 
+          else if (input$engine == "lme4::glmer") {
             model <- glmer(f, data = df, family = family,
                            control = glmerControl(optimizer = "bobyqa",
                                                   optCtrl = list(maxfun = 2e5)))
             anova_tab <- anova(model)
+            } else if (input$engine == "nlme::lme") {
+            
+            if (input$family != "gaussian")
+              stop("nlme::lme only supports Gaussian models.")
+            
+            df <- prepare_nlme_data(df, input$group_var)
+            
+            can_use_corr <- nlme_can_use_correlation(df, input$group_var)
+            
+            suggested_corr <- suggest_correlation_structure(
+              df,
+              subject_var = input$group_var,
+              time_var = input$time_var
+            )
+            
+            # USER CHOICE TAKES PRIORITY
+            cor_choice <- input$corStruct
+            if (cor_choice == "auto") cor_choice <- suggested_corr
+            
+            correlation <- NULL
+            corr_used <- "none"
+            
+            if (can_use_corr && cor_choice != "none") {
+              correlation <- get_nlme_corStruct(
+                cor_choice,
+                input$group_var,
+                input$time_var
+              )
+              corr_used <- cor_choice
+            }
+            
+            if (!can_use_corr && cor_choice != "none") {
+              showNotification(
+                "Residual correlation disabled: insufficient repeated measures.",
+                type = "warning"
+              )
+            }
+            
+            showNotification(
+              paste("Correlation used:", corr_used),
+              type = "message",
+              duration = 4
+            )
+            
+            fixed_str <- strip_lme4_random(f_str)
+            
+            model <- nlme::lme(
+              fixed = as.formula(fixed_str),
+              random = as.formula(paste0("~1|", input$group_var)),
+              correlation = correlation,
+              data = df,
+              method = "REML"
+            )
+            
+            anova_tab <- anova(model)
           }
+          
           results[[iv]] <- list(formula = f_str, model = model, anova = anova_tab)
         }, error = function(e) {
           results[[iv]] <- list(formula = f_str, error = e$message)
@@ -496,7 +690,7 @@ server <- function(input, output, session) {
     
     rv$models <- results
     results
-})
+  })
   
   # Outputs
   output$dataTable <- renderDT({
@@ -517,7 +711,7 @@ server <- function(input, output, session) {
       footer = modalButton("Close")
     ))
   })
-
+  
   output$processed_table <- DT::renderDT({
     rv$processed_data    
   })
@@ -543,16 +737,26 @@ server <- function(input, output, session) {
     if (length(results) == 0) return("No models fitted yet.Check input variables and distribution")
     
     for (nm in names(results)) {
-      cat("\n--- Model:", nm, "---\n")
       res <- results[[nm]]
+      
+      cat("\n--- Model:", nm, "---\n")
       cat("Formula:", res$formula, "\n")
+      
       if (!is.null(res$model)) {
+        
         print(summary(res$model))
+        
+        if (inherits(res$model, "lme")) {
+          cat("\nCorrelation structure:\n")
+          print(res$model$modelStruct$corStruct)
+        }
+        
       } else {
         cat("Error:", res$error, "\n")
       }
     }
   })
+  
   
   output$anovaOutput <- renderPrint({
     results <- runModels()
@@ -591,10 +795,11 @@ server <- function(input, output, session) {
           # Pairwise contrasts
           cat("\nPairwise contrasts for:", fac, "\n")
           contrast_results <- contrast(emmeans_model, method = "pairwise")
+          contrast_results_tukey <- contrast(emmeans_model, method = "pairwise",adjust="tukey")
           print(summary(contrast_results))
+          print(summary(contrast_results_tukey))
         }
         
-        ## --- Conditional pairwise comparisons for ALL combinations ---
         ## --- Conditional pairwise comparisons for ALL combinations ---
         if (length(ph_vars) >= 2) {
           combs <- combn(ph_vars, 2, simplify = FALSE)
@@ -612,6 +817,9 @@ server <- function(input, output, session) {
             form1 <- as.formula(paste("pairwise ~", facA, "|", facB))
             pw1 <- emmeans(res$model, form1)
             print(pw1)
+            cat("\nTukey adjustment\n")
+            cat("\n############## Note:Tukey will be changed to Sidak for one set of pairwise comparisons #############\n")
+            print(pw1,adjust="tukey")
             
             ## B | A
             cat(
@@ -622,20 +830,168 @@ server <- function(input, output, session) {
             form2 <- as.formula(paste("pairwise ~", facB, "|", facA))
             pw2 <- emmeans(res$model, form2)
             print(pw2)
+            cat("\nTukey adjustment\n")
+            cat("\n############## Note:Tukey will be changed to Sidak for one set of pairwise comparisons #############\n")
+            print(summary(pw2, adjust = "tukey"))
           }
         }
-        } else {
-          cat("No post-hoc factors selected or available.\n")
-        }
+      } else {
+        cat("No post-hoc factors selected or available.\n")
       }
+    }
+  })
+  
+  extract_table <- function(model) {
+    
+    if (inherits(model, "mixed")) {
+      out <- as.data.frame(anova(model))
+      out$Effect <- rownames(out)
+      rownames(out) <- NULL
+      out
+      
+    } else if (inherits(model, "glmerMod") || inherits(model, "lme")) {
+      broom.mixed::tidy(model, effects = "fixed")
+      
+    } else {
+      NULL
+    }
+  }
+  
+  clean_names <- function(df) {
+    dplyr::rename_with(
+      df,
+      ~ gsub("\\.", " ", tools::toTitleCase(.x))
+    )
+  }
+
+
+
+  format_table <- function(df) {
+    df |>
+      dplyr::mutate(
+        dplyr::across(where(is.numeric), ~ round(.x, 4))
+      )
+  }
+
+
+  observe({
+    results <- runModels()
+    req(results)
+    
+    for (nm in names(results)) {
+      local({
+        name <- nm
+        res  <- results[[name]]
+        
+        if (is.null(res$model)) return()
+        
+        output[[paste0("summary_", make.names(name))]] <- renderUI({
+          
+          tab <- extract_table(res$model)
+          req(tab, nrow(tab) > 0)
+          
+          tab <- dplyr::mutate(
+            tab,
+            dplyr::across(where(is.numeric), ~ round(.x, 4))
+          )
+          
+          HTML(
+            knitr::kable(
+              tab,
+              format  = "html",
+              caption = paste("Model results:", name),
+              align   = "l"
+            ) |>
+              kableExtra::kable_styling(
+                bootstrap_options = c("striped", "hover", "condensed"),
+                full_width = TRUE,
+                font_size = 16
+              )
+          )
+        })
+      })
+    }
+  })
+  
+
+  output$summary_tables_ui <- renderUI({
+    results <- runModels()
+    req(results)
+
+    tabs <- lapply(names(results), function(nm) {
+      res <- results[[nm]]
+      if (is.null(res$model)) return(NULL)
+
+      tabPanel(
+        nm,
+        uiOutput(paste0("summary_", make.names(nm)))
+      )
     })
+
+    do.call(tabsetPanel, tabs)
+  })
   
   
+  
+  #   observe({
+  #   results <- runModels()
+  #   req(results)
+  # 
+  #   for (nm in names(results)) {
+  #     local({
+  #       name <- nm
+  #       res  <- results[[name]]
+  # 
+  #       if (is.null(res$model)) return(NULL)
+  # 
+  #       output[[paste0("summary_", make.names(name))]] <- DT::renderDT({
+  # 
+  #         broom.mixed::tidy(
+  #            res$model,
+  #            effects = "fixed",
+  #            conf.int = TRUE)|>
+  # 
+  #           DT::datatable(
+  #             options = list(
+  #               pageLength = 10,
+  #               scrollX = TRUE
+  #             ),
+  #             rownames = FALSE
+  #           )
+  #       })
+  #     })
+  #   }
+  # })
+  # 
+  # output$summary_tables_ui <- renderUI({
+  #   results <- runModels()
+  #   req(results)
+  # 
+  #   tabs <- lapply(names(results), function(nm) {
+  #     res <- results[[nm]]
+  # 
+  #     if (is.null(res$model)) return(NULL)
+  # 
+  #      summ <- broom.mixed::tidy(
+  #        res$model,
+  #        effects = "fixed",
+  #        conf.int = TRUE
+  #      )
+  # 
+  #     tabPanel(
+  #       nm,
+  #       DT::DTOutput(paste0("summary_", make.names(nm)))
+  #     )
+  #   })
+  # 
+  #   do.call(tabsetPanel, tabs)
+  # })
+  # 
   
   # # ------------------------------------------------------------------
   # # Distribution fitting that runs ONLY for the selected dependent variable
   # # ------------------------------------------------------------------
-
+  
   
   observeEvent(input$fit_distribution, {
     
@@ -760,7 +1116,7 @@ server <- function(input, output, session) {
     }
   )
   
-
+  
   output$dist_descriptive <- renderPlot({
     req(rv$dist_fits, input$y)
     
