@@ -9,11 +9,31 @@
 # It provides diagnostic plots and post-hoc comparisons
 #**************************************************************
 
-options(width = 200)
-options(shiny.maxRequestSize=30*1024^2) # Maximum upload file size 30 MB
+#**************************************************************
+# Issue with performance package (check_model) deployment (due to patchwork package) on shiny server [Didn't work]
+#**************************************************************
+# Run when getwd() is shinyapp folder (Project folder)
+# renv::load()
+# renv::init()
+# renv::snapshot()
+
+# Deploy with (if there is package version issue):
+# renv.lock included
+# rsconnect::deployApp()
+
+# ---- FORCE renv activation (Shiny Server safe) ----
+# if (file.exists("renv/activate.R")) {
+#   source("renv/activate.R")
+# }
+
+# activate(project = NULL, profile = NULL)
+# deactivate(project = NULL, clean = FALSE)
+#**************************************************************
 
 # Load libraries
+suppressPackageStartupMessages({
 library(shiny)
+#library(shinylogs) #  does not work on shinyapps.io
 library(readr)
 library(readxl)
 library(DT)
@@ -27,11 +47,22 @@ library(parameters)
 library(modelsummary)
 library(mctest)
 library(dataPreparation)
-library(gtsummary)
 library(ggplot2)
 library(nlme)
 library(knitr)
-library(sjPlot)
+library(future)
+library(performance)
+library(predictmeans)
+#library(HLMdiag)
+#library(sjPlot)
+#library(JWileymisc)
+#library(multilevelTools)
+})
+
+
+options(width = 200)
+options(shiny.maxRequestSize=30*1024^2) # Maximum upload file size 30 MB
+
 
 # UI -----------------------------
 ui <- fluidPage(
@@ -107,7 +138,7 @@ ui <- fluidPage(
       selectInput("engine", "Modeling Engine",
                   choices = c("afex::mixed","lme4::glmer","nlme::lme"),
                   selected = "afex::mixed"),
-     
+      
       selectInput("corStruct","Correlation structure (nlme)",
                   choices = c(
                     "None" = "none",
@@ -126,8 +157,8 @@ ui <- fluidPage(
                 "Random Effects (nlme syntax)",
                 value = "~1|Subject"),
       
-      textInput("group_var","Random Grouping variable for correlation (e.g., Subject)"),
-      textInput("time_var","Time variable for AR structures (e.g., Time)"),
+      textInput("group_var","Optional Random Grouping variable for Auto correlation (e.g., Subject)"),
+      textInput("time_var","Optional Time variable for AR structures (e.g., trial, block, day, session)"),
       hr(),
       
       uiOutput("posthoc_vars_ui"),
@@ -193,6 +224,10 @@ ui <- fluidPage(
         tabPanel(
           "Summary Table",
           uiOutput("summary_tables_ui")
+        ),
+        tabPanel(
+          "Performance",
+          uiOutput("performance_ui")
         ),
         tabPanel("Post-hoc (EMMs)", verbatimTextOutput("emmeansOutput")),
         tabPanel("Summary Plots",
@@ -266,7 +301,8 @@ server <- function(input, output, session) {
     
     # Factors
     if (!is.null(input$factor_vars)) {
-      for (v in input$factor_vars) df[[v]] <- as.factor(df[[v]])
+      for (v in input$factor_vars) 
+        df[[v]] <- as.factor(df[[v]])
     }
     
     # Numeric
@@ -356,19 +392,34 @@ server <- function(input, output, session) {
     })
   })
   
-
+  
   
   # -------------------------------
-  # nlme helpers (FINAL)
+  # nlme helpers 
   # -------------------------------
+  
+  get_nlme_subject <- function(random_formula) {
+    if (!nzchar(random_formula)) return(NULL)
+    gsub("^~.*\\|\\s*([^/]+).*$", "\\1", random_formula)
+  }
   
   prepare_nlme_data <- function(df, subject_var) {
-    df[[subject_var]] <- as.factor(df[[subject_var]])
-    df <- df[order(df[[subject_var]]), ]
     
-    # SAFE trial index
-    df$.trial_index <- ave(seq_len(nrow(df)), df[[subject_var]], FUN = seq_along
+    if (!nzchar(subject_var))
+      stop("No subject variable detected for nlme.")
+    
+    if (!subject_var %in% names(df))
+      stop(paste("Grouping variable not found:", subject_var))
+    
+    df[[subject_var]] <- factor(df[[subject_var]])
+    df <- df[order(df[[subject_var]]), , drop = FALSE]
+    
+    df$.trial_index <- ave(
+      seq_len(nrow(df)),
+      df[[subject_var]],
+      FUN = seq_along
     )
+    
     df
   }
   
@@ -383,50 +434,38 @@ server <- function(input, output, session) {
       return("none")
     }
     
-    # If an explicit time variable exists → prefer AR(1)
     if (nzchar(time_var) && time_var %in% names(df)) {
       return("corAR1")
     }
     
-    # Otherwise default to CS
-    return("corCompSymm")
+    "corCompSymm"
   }
   
   get_nlme_corStruct <- function(type, groupvar, timevar) {
     
-    if (type == "none" || !nzchar(type)) {
-      return(NULL)
-    }
+    if (type == "none" || !nzchar(type)) return(NULL)
     
     switch(
       type,
-      
-      # AR(1): ordered within-subject
       corAR1 = corAR1(
         form = as.formula(paste("~ .trial_index |", groupvar))
       ),
-      
-      # Compound symmetry: no ordering needed
       corCompSymm = corCompSymm(
         form = as.formula(paste("~ 1 |", groupvar))
       ),
-      
-      # Unstructured symmetric (requires ordering!)
       corSymm = corSymm(
         form = as.formula(paste("~ .trial_index |", groupvar))
       ),
-      
-      # Optional: exponential (continuous time)
       corExp = corExp(
         form = as.formula(paste("~", timevar, "|", groupvar))
       ),
-      
       NULL
     )
   }
   
   strip_lme4_random <- function(formula_string) {
-    gsub("\\+?\\s*\\([^\\)]*\\|[^\\)]*\\)", "", formula_string)
+    f <- gsub("\\+?\\s*\\([^\\)]*\\|[^\\)]*\\)", "", formula_string)
+    gsub("\\+\\s*1$", "", f)
   }
   
   # Run models
@@ -436,24 +475,24 @@ server <- function(input, output, session) {
     df <- if (!is.null(rv$data_no_outliers)) rv$data_no_outliers else 
       if (!is.null(rv$cleaned_data)) rv$cleaned_data else rv$selected_data
     
-    # --------------------------------
-    # nlme preprocessing
-    # --------------------------------
-    
-    if (input$engine == "nlme::lme") {
-      
-      req(input$group_var)  # e.g., "Subject"
-      
-      df <- prepare_nlme_data(df, input$group_var)
-      
-      can_use_corr <- nlme_can_use_correlation(df, input$group_var)
-      
-      suggested_corr <- suggest_correlation_structure(
-        df,
-        subject_var = input$group_var,
-        time_var = input$time_var  # optional UI input
-      )
-    }
+    # # --------------------------------
+    # # nlme preprocessing
+    # # --------------------------------
+    # 
+    # if (input$engine == "nlme::lme") {
+    #   
+    #   req(input$group_var)  # e.g., "Subject"
+    #   
+    #   df <- prepare_nlme_data(df, input$group_var)
+    #   
+    #   can_use_corr <- nlme_can_use_correlation(df, input$group_var)
+    #   
+    #   suggested_corr <- suggest_correlation_structure(
+    #     df,
+    #     subject_var = input$group_var,
+    #     time_var = input$time_var  # optional UI input
+    #   )
+    # }
     
     # Family + link function builder
     get_family <- function(fam, linkfun) {
@@ -488,43 +527,80 @@ server <- function(input, output, session) {
     # --- CASE 1: Custom equation provided ---
     if (nzchar(custom_eq)) {
       f_str <- if (grepl("~", custom_eq)) custom_eq else paste(input$y, "~", custom_eq)
-      if (!grepl("\\|", f_str) && nzchar(input$random_effects)) {
-        f_str <- paste(f_str, "+", input$random_effects)
+      # if (!grepl("\\|", f_str) && nzchar(input$random_effects)) {
+      #   f_str <- paste(f_str, "+", input$random_effects)
+      # }
+      if (input$engine != "nlme::lme") {
+        if (!grepl("\\|", f_str) && nzchar(input$random_effects)) {
+          f_str <- paste(f_str, "+", input$random_effects)
+        }
       }
       f <- as.formula(f_str)
       
       tryCatch({
         if (input$engine == "afex::mixed") {
-          if (identical(family, gaussian)) {
+          if (input$family == "gaussian") {
             model <- mixed(f, data = df, method = "KR")
             anova_tab <- anova(model, ddf = "Kenward-Roger", type = 3)
-          } else {
-            model <- mixed(f, data = df, family = family, method = "LRT")
-            # ,control = lmerControl(optCtrl = list(maxfun = 1e6)), 
-            # expand_re = TRUE)
-            anova_tab <- anova(model)
-          }
+          }        
         } else if (input$engine == "lme4::glmer") {
-          model <- glmer(f, data = df, family = family,
-                         control = glmerControl(optimizer = "bobyqa",
-                                                optCtrl = list(maxfun = 2e5)))
+          base_family <- switch(
+            input$family,
+            "gamma"    = Gamma(),
+            "binomial" = binomial(),
+            "poisson"  = poisson()
+          )
+          model <- mixed(f, data = df, family = base_family, method = "LRT")
           anova_tab <- anova(model)
-        } else if (input$engine == "nlme::lme") {
-          
+        }
+        
+        
+        # if (input$engine == "afex::mixed") {
+        #   if (input$family == "gaussian") {
+        #     model <- mixed(f, data = df, method = "KR")
+        #     anova_tab <- anova(model, ddf = "Kenward-Roger", type = 3)
+        #   } else {
+        #     model <- mixed(f, data = df, family = family, method = "LRT")
+        #     # ,control = lmerControl(optCtrl = list(maxfun = 1e6)), 
+        #     # expand_re = TRUE)
+        #     anova_tab <- anova(model)
+        #   }
+        # } else if (input$engine == "lme4::glmer") {
+        #   model <- glmer(f, data = df, family = family,
+        #                  control = glmerControl(optimizer = "bobyqa",
+        #                                         optCtrl = list(maxfun = 2e5)))
+        #   anova_tab <- anova(model)
+        # }
+        
+        else if(input$engine == "nlme::lme") {
           if (input$family != "gaussian")
             stop("nlme::lme only supports Gaussian models.")
           
-          df <- prepare_nlme_data(df, input$group_var)
+          # --- Random effects: nlme ONLY ---
+          nlme_random <- trimws(input$nlme_random)
           
-          can_use_corr <- nlme_can_use_correlation(df, input$group_var)
+          random_formula <- if (nzchar(nlme_random)) {
+            as.formula(nlme_random)
+          } else {
+            as.formula(paste0("~1|", input$group_var))
+          }
+          
+          # --- Extract top-level subject ---
+          subject_var <- get_nlme_subject(
+            if (nzchar(nlme_random)) nlme_random else paste0("~1|", input$group_var)
+          )
+          
+          df <- prepare_nlme_data(df, subject_var)
+          
+          # --- Correlation handling ---
+          can_use_corr <- nlme_can_use_correlation(df, subject_var)
           
           suggested_corr <- suggest_correlation_structure(
             df,
-            subject_var = input$group_var,
+            subject_var = subject_var,
             time_var = input$time_var
           )
           
-          # USER CHOICE TAKES PRIORITY
           cor_choice <- input$corStruct
           if (cor_choice == "auto") cor_choice <- suggested_corr
           
@@ -534,7 +610,7 @@ server <- function(input, output, session) {
           if (can_use_corr && cor_choice != "none") {
             correlation <- get_nlme_corStruct(
               cor_choice,
-              input$group_var,
+              subject_var,
               input$time_var
             )
             corr_used <- cor_choice
@@ -553,11 +629,14 @@ server <- function(input, output, session) {
             duration = 4
           )
           
+          # --- FIXED formula ONLY (no +1, no random terms) ---
           fixed_str <- strip_lme4_random(f_str)
+          #fixed_str <- gsub("\\+\\s*1$", "", strip_lme4_random(f_str))
+          
           
           model <- nlme::lme(
             fixed = as.formula(fixed_str),
-            random = as.formula(paste0("~1|", input$group_var)),
+            random = random_formula,
             correlation = correlation,
             data = df,
             method = "REML"
@@ -566,7 +645,22 @@ server <- function(input, output, session) {
           anova_tab <- anova(model)
         }
         
-        results[[custom_eq]] <- list(formula = f_str, model = model, anova = anova_tab)
+        results[[custom_eq]] <- list(engine  = input$engine,formula = f_str, model = model, anova = anova_tab)
+        # if (input$engine == "nlme::lme") {
+        #   results[[custom_eq]] <- list(
+        #     fixed = fixed_str,
+        #     random = deparse(random_formula),
+        #     correlation = corr_used,
+        #     model = model,
+        #     anova = anova_tab
+        #   )
+        # } else {
+        #   results[[custom_eq]] <- list(
+        #     formula = f_str,
+        #     model = model,
+        #     anova = anova_tab
+        #   )
+        # }
       }, error = function(e) {
         results[[custom_eq]] <- list(formula = f_str, error = e$message)
       })
@@ -592,15 +686,21 @@ server <- function(input, output, session) {
           }
         }
         
-        f_str <- paste(input$y, "~", rhs, "+", rand_terms)
+        #f_str <- paste(input$y, "~", rhs, "+", rand_terms)
+        if (input$engine == "nlme::lme") {
+          f_str <- paste(input$y, "~", rhs)
+        } else {
+          #rand_terms <- ifelse(nzchar(input$random_effects), input$random_effects, "1")
+          f_str <- paste(input$y, "~", rhs, "+", rand_terms)
+        }
         f <- as.formula(f_str)
         
         tryCatch({
           if (input$engine == "afex::mixed") {
             
             # AFEX rule:
-            # gaussian  → method = "KR"
-            # non-gaussian → family only (no link), method = "LRT"
+            # gaussian method = "KR"
+            # non-gaussian family only (no link), method = "LRT"
             
             fam_name <- input$family
             
@@ -624,22 +724,36 @@ server <- function(input, output, session) {
                            control = glmerControl(optimizer = "bobyqa",
                                                   optCtrl = list(maxfun = 2e5)))
             anova_tab <- anova(model)
-            } else if (input$engine == "nlme::lme") {
+          } else if (input$engine == "nlme::lme") {
             
             if (input$family != "gaussian")
               stop("nlme::lme only supports Gaussian models.")
             
-            df <- prepare_nlme_data(df, input$group_var)
+            # --- Random effects: nlme ONLY ---
+            nlme_random <- trimws(input$nlme_random)
             
-            can_use_corr <- nlme_can_use_correlation(df, input$group_var)
+            random_formula <- if (nzchar(nlme_random)) {
+              as.formula(nlme_random)
+            } else {
+              as.formula(paste0("~1|", input$group_var))
+            }
+            
+            # --- Extract top-level subject ---
+            subject_var <- get_nlme_subject(
+              if (nzchar(nlme_random)) nlme_random else paste0("~1|", input$group_var)
+            )
+            
+            df <- prepare_nlme_data(df, subject_var)
+            
+            # --- Correlation handling ---
+            can_use_corr <- nlme_can_use_correlation(df, subject_var)
             
             suggested_corr <- suggest_correlation_structure(
               df,
-              subject_var = input$group_var,
+              subject_var = subject_var,
               time_var = input$time_var
             )
             
-            # USER CHOICE TAKES PRIORITY
             cor_choice <- input$corStruct
             if (cor_choice == "auto") cor_choice <- suggested_corr
             
@@ -649,7 +763,7 @@ server <- function(input, output, session) {
             if (can_use_corr && cor_choice != "none") {
               correlation <- get_nlme_corStruct(
                 cor_choice,
-                input$group_var,
+                subject_var,
                 input$time_var
               )
               corr_used <- cor_choice
@@ -668,11 +782,13 @@ server <- function(input, output, session) {
               duration = 4
             )
             
+            # --- FIXED formula ONLY (no +1, no random terms) ---
             fixed_str <- strip_lme4_random(f_str)
+            #fixed_str <- gsub("\\+\\s*1$", "", strip_lme4_random(f_str))
             
             model <- nlme::lme(
               fixed = as.formula(fixed_str),
-              random = as.formula(paste0("~1|", input$group_var)),
+              random = random_formula,
               correlation = correlation,
               data = df,
               method = "REML"
@@ -681,7 +797,43 @@ server <- function(input, output, session) {
             anova_tab <- anova(model)
           }
           
-          results[[iv]] <- list(formula = f_str, model = model, anova = anova_tab)
+          results[[iv]] <- list(engine  = input$engine,formula = f_str, model = model, anova = anova_tab)
+          
+          #random_formula  <- formula(model$modelStruct$reStruct)
+          
+          # cor_formula <- "none"
+          # 
+          # cs <- model$modelStruct$corStruct
+          # 
+          # if (!is.null(cs)) {
+          #   cor_formula <- tryCatch(
+          #     {
+          #       deparse(nlme::getCovariateFormula(cs))
+          #     },
+          #     error = function(e) {
+          #       deparse(formula(cs))
+          #     }
+          #   )
+          # }
+          # 
+          #  
+          #  if (input$engine == "nlme::lme") {
+          # results[[iv]] <- list(
+          #   engine      = "nlme::lme",
+          #   fixed       = fixed_str,
+          #   random      = random_formula,
+          #   correlation = cor_formula,
+          #   model       = model,
+          #   anova       = anova_tab
+          # )
+          # } else {
+          #   results[[iv]] <- list(
+          #     engine  = input$engine,
+          #     formula = f_str,
+          #     model = model,
+          #     anova = anova_tab
+          #   )
+          #  }
         }, error = function(e) {
           results[[iv]] <- list(formula = f_str, error = e$message)
         })
@@ -740,11 +892,23 @@ server <- function(input, output, session) {
       res <- results[[nm]]
       
       cat("\n--- Model:", nm, "---\n")
-      cat("Formula:", res$formula, "\n")
+      #cat("Formula:", res$formula, "\n")
+      if (!is.null(res$formula)) {
+        cat("Formula:", res$formula, "\n")
+      }
+      if (!is.null(res$fixed)) {
+        cat("Engine:", res$engine, "\n")
+        cat("Fixed:", res$fixed, "\n")
+        cat("Random:", res$random, "\n")
+        cat("Correlation:", res$correlation, "\n")
+        
+      }
+      
       
       if (!is.null(res$model)) {
         
         print(summary(res$model))
+        #vcov(summary(res$model)))
         
         if (inherits(res$model, "lme")) {
           cat("\nCorrelation structure:\n")
@@ -765,7 +929,19 @@ server <- function(input, output, session) {
     for (nm in names(results)) {
       cat("\n--- ANOVA for:", nm, "---\n")
       res <- results[[nm]]
-      cat("Formula:", res$formula, "\n")
+      #cat("Formula:", res$formula, "\n")
+      if (!is.null(res$formula)) {
+        cat("Formula:", res$formula, "\n")
+      }
+      if (!is.null(res$fixed)) {
+        cat("Engine:", res$engine, "\n")
+        cat("Fixed:", res$fixed, "\n")
+        cat("Random:", res$random, "\n")
+        cat("Correlation:", res$correlation, "\n")
+        print(res$anova)
+        
+      }
+      
       if (!is.null(res$anova)) {
         print(res$anova)
       } else {
@@ -773,6 +949,7 @@ server <- function(input, output, session) {
       }
     }
   })
+  
   
   output$emmeansOutput <- renderPrint({
     results <- runModels()
@@ -863,17 +1040,17 @@ server <- function(input, output, session) {
       ~ gsub("\\.", " ", tools::toTitleCase(.x))
     )
   }
-
-
-
+  
+  
+  
   format_table <- function(df) {
     df |>
       dplyr::mutate(
         dplyr::across(where(is.numeric), ~ round(.x, 4))
       )
   }
-
-
+  
+  
   observe({
     results <- runModels()
     req(results)
@@ -913,80 +1090,330 @@ server <- function(input, output, session) {
     }
   })
   
-
   output$summary_tables_ui <- renderUI({
     results <- runModels()
     req(results)
-
+    
     tabs <- lapply(names(results), function(nm) {
       res <- results[[nm]]
       if (is.null(res$model)) return(NULL)
-
+      
       tabPanel(
         nm,
         uiOutput(paste0("summary_", make.names(nm)))
       )
     })
-
+    
     do.call(tabsetPanel, tabs)
   })
   
-  
-  
-  #   observe({
+  # observe({
   #   results <- runModels()
   #   req(results)
-  # 
+  #   
   #   for (nm in names(results)) {
   #     local({
   #       name <- nm
   #       res  <- results[[name]]
-  # 
-  #       if (is.null(res$model)) return(NULL)
-  # 
-  #       output[[paste0("summary_", make.names(name))]] <- DT::renderDT({
-  # 
-  #         broom.mixed::tidy(
-  #            res$model,
-  #            effects = "fixed",
-  #            conf.int = TRUE)|>
-  # 
-  #           DT::datatable(
-  #             options = list(
-  #               pageLength = 10,
-  #               scrollX = TRUE
-  #             ),
-  #             rownames = FALSE
-  #           )
+  #       
+  #       if (is.null(res$model)) return()
+  #       
+  #       model_obj <- res$model
+  #       safe_name <- make.names(name)
+  #       
+  #       # ---- model_performance ----
+  #       output[[paste0("perf_metrics_", safe_name)]] <- renderPrint({
+  #         tryCatch(
+  #           {
+  #             model_performance(model_obj)
+  #           },
+  #           error = function(e) {
+  #             paste("Performance metrics not available:", e$message)
+  #           }
+  #         )
+  #       })
+  #       
+  #       # ---- check_model plots ----
+  #       output[[paste0("check_model_", safe_name)]] <- renderPlot({
+  #         tryCatch(
+  #           {
+  #             check_model(model_obj)
+  #           },
+  #           error = function(e) {
+  #             plot.new()
+  #             text(0.5, 0.5, paste("check_model failed:", e$message))
+  #           }
+  #         )
+  #       })
+  #     })
+  #   }
+  # })
+  
+  unwrap_model <- function(model) {
+    
+    # afex::mixed
+    if (inherits(model, "mixed")) {
+      
+      # Newer afex
+      if (!is.null(model$full_model)) {
+        return(model$full_model)
+      }
+      
+      # Older afex
+      if (!is.null(model$merMod)) {
+        return(model$merMod)
+      }
+      
+      # Fallback
+      if (!is.null(model$model)) {
+        return(model$model)
+      }
+    }
+    
+    # lme4 / nlme models pass through
+    model
+  }
+  
+  # ------------------------------------------------------------------
+  # Model Diagnostics
+  # ------------------------------------------------------------------
+  
+  check_singularity_flag <- function(model) {
+    if (inherits(model, c("lmerMod", "glmerMod"))) {
+      isSingular(model, tol = 1e-5)
+    } else {
+      NA
+    }
+  }
+  
+  check_convergence_flag <- function(model) {
+    
+    # lme4 / glmer
+    if (inherits(model, c("lmerMod", "glmerMod"))) {
+      optinfo <- model@optinfo
+      if (!is.null(optinfo$conv$lme4$messages)) {
+        return(paste(optinfo$conv$lme4$messages, collapse = "; "))
+      }
+      return("OK")
+    }
+    
+    # nlme
+    if (inherits(model, "lme")) {
+      if (!is.null(model$fail) && model$fail) {
+        return("Model failed to converge")
+      }
+      return("OK")
+    }
+    
+    "OK"
+  }
+  
+  observe({
+    results <- runModels()
+    req(results)
+    
+    for (nm in names(results)) {
+      local({
+        
+        safe_name <- make.names(nm)
+        res <- results[[nm]]
+        
+        if (is.null(res$model)) return()
+        
+        model_obj <- unwrap_model(res$model)
+        
+        # ---- Diagnostic flags ----
+        output[[paste0("diagnostic_flags_", safe_name)]] <- renderPrint({
+          
+          singular_flag <- check_singularity_flag(model_obj)
+          convergence   <- check_convergence_flag(model_obj)
+          
+          cat("=== Diagnostic Flags ===\n")
+          
+          if (!is.na(singular_flag)) {
+            cat(
+              "Singular fit:",
+              ifelse(singular_flag, "YES ⚠️", "NO ✅"),
+              "\n"
+            )
+          } else {
+            cat("Singular fit: N/A (nlme)\n")
+          }
+          
+          cat("Convergence:", convergence, "\n")
+        })
+    
+        # ---- Performance metrics ----
+        output[[paste0("perf_metrics_", safe_name)]] <- renderPrint({
+          
+          if (inherits(model_obj, "lme")) {
+            data.frame(
+              AIC    = AIC(model_obj),
+              BIC    = BIC(model_obj),
+              logLik = as.numeric(logLik(model_obj)),
+              sigma  = model_obj$sigma,
+              nobs   = nobs(model_obj)
+            )
+          } else {
+            performance::model_performance(model_obj)
+          }
+        })
+        
+        output[[paste0("check_model_", safe_name)]] <- renderPlot({
+
+          if (inherits(model_obj, "lme")) {
+            #nlme::plot.lme(model_obj, resid(., type = "p") ~ fitted(.))
+            #multilevelTools::modelDiagnostics(model_obj)
+            
+            predictmeans::residplot(
+              model_obj,
+              level = 1,
+              id = FALSE,
+              newwd = FALSE,
+              ask = FALSE
+            )
+            #invisible(NULL)
+            
+          } else {
+            #performance::check_model(model_obj) #Update packages "patchwork" and "parameters" if there is plot window error
+            #HLMdiag::residplot(model_obj, type = "all")
+            predictmeans::residplot(
+              model_obj,
+              level = 1,
+              id = FALSE,
+              newwd = FALSE,
+              ask = FALSE
+            )
+            
+          }
+        })
+      })
+    }
+  })     
+        
+        
+  output$performance_ui <- renderUI({
+    results <- runModels()
+    req(results)
+    
+    tabs <- lapply(names(results), function(nm) {
+      
+      tabPanel(
+        nm,
+        
+        h4("Diagnostic flags"),
+        verbatimTextOutput(
+          outputId = paste0("diagnostic_flags_", make.names(nm))
+        ),
+        hr(),
+        
+        h4("Performance metrics"),
+        verbatimTextOutput(
+          outputId = paste0("perf_metrics_", make.names(nm))
+        ),
+        hr(),
+        
+        h4("Model checks"),
+        plotOutput(
+          outputId = paste0("check_model_", make.names(nm)),
+          height = "900px"
+        )
+      )
+    })
+    
+    do.call(tabsetPanel, tabs)
+  })
+  
+  ##################################################################### 
+  # Model Diagnostics Without Convergence and Singularity check
+  ##################################################################### 
+  
+  # observe({
+  #   results <- runModels()
+  #   req(results)
+  #   
+  #   for (nm in names(results)) {
+  #     local({
+  #       name <- nm
+  #       res  <- results[[name]]
+  #       
+  #       if (is.null(res$model)) return()
+  #       
+  #       safe_name <- make.names(name)
+  #       model_obj <- unwrap_model(res$model)
+  #       
+  #       # ---- model_performance ----
+  #       
+  #       output[[paste0("perf_metrics_", safe_name)]] <- renderPrint({
+  #         tryCatch(
+  #           {
+  #             if (inherits(model_obj, "lme")) {
+  #               
+  #               # ---- SAFE nlme metrics ----
+  #               data.frame(
+  #                 AIC        = AIC(model_obj),
+  #                 BIC        = BIC(model_obj),
+  #                 logLik     = as.numeric(logLik(model_obj)),
+  #                 sigma      = model_obj$sigma,
+  #                 nobs       = nobs(model_obj)
+  #               )
+  #               
+  #             } else {
+  #               
+  #               # ---- lme4 / afex ----
+  #               performance::model_performance(model_obj)
+  #             }
+  #           },
+  #           error = function(e) {
+  #             paste("Performance metrics not available:", e$message)
+  #           }
+  #         )
+  #       })
+  #       
+  #       
+  #       # ---- check_model ----
+  #       output[[paste0("check_model_", safe_name)]] <- renderPlot({
+  #         tryCatch(
+  #           {
+  #             performance::check_model(model_obj)
+  #           },
+  #           error = function(e) {
+  #             plot.new()
+  #             text(0.5, 0.5, paste("check_model failed:", e$message))
+  #           }
+  #         )
   #       })
   #     })
   #   }
   # })
   # 
-  # output$summary_tables_ui <- renderUI({
+  
+  # output$performance_ui <- renderUI({
   #   results <- runModels()
   #   req(results)
-  # 
+  #   
   #   tabs <- lapply(names(results), function(nm) {
   #     res <- results[[nm]]
-  # 
   #     if (is.null(res$model)) return(NULL)
-  # 
-  #      summ <- broom.mixed::tidy(
-  #        res$model,
-  #        effects = "fixed",
-  #        conf.int = TRUE
-  #      )
-  # 
+  #     
   #     tabPanel(
   #       nm,
-  #       DT::DTOutput(paste0("summary_", make.names(nm)))
+  #       h4("Model diagnostics"),
+  #       verbatimTextOutput(paste0("perf_metrics_", make.names(nm))),
+  #       hr(),
+  #       h4("Model checks"),
+  #       plotOutput(
+  #         paste0("check_model_", make.names(nm)),
+  #         height = "900px"
+  #       )
+  #       
   #     )
   #   })
-  # 
+  #   
   #   do.call(tabsetPanel, tabs)
   # })
-  # 
+  
+  
   
   # # ------------------------------------------------------------------
   # # Distribution fitting that runs ONLY for the selected dependent variable
@@ -1028,7 +1455,7 @@ server <- function(input, output, session) {
       Weibull   = fw
     )
     
-    # ▶ Log output for FitDist Output tab
+    # â¶ Log output for FitDist Output tab
     logs <- c(
       paste0("===== Dependent Variable: ", varname, " ====="),
       "",
