@@ -2,7 +2,7 @@
 # by Puneet Talwar
 # Dec 2025
 
-# R 4.1.3
+# R 4.5.0
 #**************************************************************
 # A shiny app to fit GLMM models using afex and glmer packages.
 # It provides results similar to SAS outputs.
@@ -16,6 +16,8 @@
 # renv::load()
 # renv::init()
 # renv::snapshot()
+
+# renv::deactivate()
 
 # Deploy with (if there is package version issue):
 # renv.lock included
@@ -392,10 +394,8 @@ server <- function(input, output, session) {
     })
   })
   
-  
-  
   # -------------------------------
-  # nlme helpers 
+  # nlme helpers (TIME-AWARE FINAL)
   # -------------------------------
   
   get_nlme_subject <- function(random_formula) {
@@ -403,70 +403,109 @@ server <- function(input, output, session) {
     gsub("^~.*\\|\\s*([^/]+).*$", "\\1", random_formula)
   }
   
-  prepare_nlme_data <- function(df, subject_var) {
+  prepare_nlme_data <- function(df, subject_var, time_var = NULL) {
     
-    if (!nzchar(subject_var))
-      stop("No subject variable detected for nlme.")
+    df[[subject_var]] <- as.factor(df[[subject_var]])
     
-    if (!subject_var %in% names(df))
-      stop(paste("Grouping variable not found:", subject_var))
+    # Order by subject AND time if provided
+    if (!is.null(time_var) && nzchar(time_var) && time_var %in% names(df)) {
+      df <- df[order(df[[subject_var]], df[[time_var]]), ]
+    } else {
+      df <- df[order(df[[subject_var]]), ]
+    }
     
-    df[[subject_var]] <- factor(df[[subject_var]])
-    df <- df[order(df[[subject_var]]), , drop = FALSE]
-    
-    df$.trial_index <- ave(
-      seq_len(nrow(df)),
-      df[[subject_var]],
-      FUN = seq_along
-    )
+    # Fallback index (only used if no time_var)
+    df$.trial_index <- ave(seq_len(nrow(df)), df[[subject_var]], FUN = seq_along)
     
     df
   }
   
-  nlme_can_use_correlation <- function(df, subject_var) {
+  
+  nlme_can_use_correlation <- function(df, subject_var, time_var = NULL) {
+    
     grp_sizes <- table(df[[subject_var]])
-    sum(grp_sizes >= 2) >= 2
+    
+    enough_repeats <- sum(grp_sizes >= 2) >= 2
+    
+    if (!enough_repeats) return(FALSE)
+    
+    # If time_var supplied, ensure it varies within subject
+    if (!is.null(time_var) && nzchar(time_var) && time_var %in% names(df)) {
+      
+      within_var <- tapply(df[[time_var]], df[[subject_var]], function(x)
+        length(unique(x)) > 1
+      )
+      
+      return(any(within_var))
+    }
+    
+    TRUE
   }
+  
   
   suggest_correlation_structure <- function(df, subject_var, time_var = NULL) {
     
-    if (!nlme_can_use_correlation(df, subject_var)) {
+    if (!nlme_can_use_correlation(df, subject_var, time_var)) {
       return("none")
     }
     
-    if (nzchar(time_var) && time_var %in% names(df)) {
+    if (!is.null(time_var) && nzchar(time_var) && time_var %in% names(df)) {
       return("corAR1")
     }
     
-    "corCompSymm"
+    return("corCompSymm")
   }
   
-  get_nlme_corStruct <- function(type, groupvar, timevar) {
+  
+  get_nlme_corStruct <- function(type, groupvar, timevar = NULL) {
     
-    if (type == "none" || !nzchar(type)) return(NULL)
+    if (is.null(type) || type == "none" || !nzchar(type)) {
+      return(NULL)
+    }
     
     switch(
       type,
-      corAR1 = corAR1(
-        form = as.formula(paste("~ .trial_index |", groupvar))
-      ),
-      corCompSymm = corCompSymm(
-        form = as.formula(paste("~ 1 |", groupvar))
-      ),
-      corSymm = corSymm(
-        form = as.formula(paste("~ .trial_index |", groupvar))
-      ),
-      corExp = corExp(
-        form = as.formula(paste("~", timevar, "|", groupvar))
-      ),
+      
+      # AR(1) — USE time variable if available
+      corAR1 = {
+        if (!is.null(timevar) && nzchar(timevar)) {
+          corAR1(form = as.formula(paste("~", timevar, "|", groupvar)))
+        } else {
+          corAR1(form = as.formula(paste("~ .trial_index |", groupvar)))
+        }
+      },
+      
+      # Compound symmetry
+      corCompSymm = {
+        corCompSymm(form = as.formula(paste("~ 1 |", groupvar)))
+      },
+      
+      # Unstructured symmetric
+      corSymm = {
+        if (!is.null(timevar) && nzchar(timevar)) {
+          corSymm(form = as.formula(paste("~", timevar, "|", groupvar)))
+        } else {
+          corSymm(form = as.formula(paste("~ .trial_index |", groupvar)))
+        }
+      },
+      
+      # Continuous-time exponential
+      corExp = {
+        if (is.null(timevar) || !nzchar(timevar)) {
+          stop("corExp requires a numeric time variable.")
+        }
+        corExp(form = as.formula(paste("~", timevar, "|", groupvar)))
+      },
+      
       NULL
     )
   }
   
+  
   strip_lme4_random <- function(formula_string) {
-    f <- gsub("\\+?\\s*\\([^\\)]*\\|[^\\)]*\\)", "", formula_string)
-    gsub("\\+\\s*1$", "", f)
+    gsub("\\+?\\s*\\([^\\)]*\\|[^\\)]*\\)", "", formula_string)
   }
+  
   
   # Run models
   runModels <- eventReactive(input$run, {
@@ -475,25 +514,7 @@ server <- function(input, output, session) {
     df <- if (!is.null(rv$data_no_outliers)) rv$data_no_outliers else 
       if (!is.null(rv$cleaned_data)) rv$cleaned_data else rv$selected_data
     
-    # # --------------------------------
-    # # nlme preprocessing
-    # # --------------------------------
-    # 
-    # if (input$engine == "nlme::lme") {
-    #   
-    #   req(input$group_var)  # e.g., "Subject"
-    #   
-    #   df <- prepare_nlme_data(df, input$group_var)
-    #   
-    #   can_use_corr <- nlme_can_use_correlation(df, input$group_var)
-    #   
-    #   suggested_corr <- suggest_correlation_structure(
-    #     df,
-    #     subject_var = input$group_var,
-    #     time_var = input$time_var  # optional UI input
-    #   )
-    # }
-    
+
     # Family + link function builder
     get_family <- function(fam, linkfun) {
       if (linkfun == "default") {
@@ -552,27 +573,7 @@ server <- function(input, output, session) {
           )
           model <- mixed(f, data = df, family = base_family, method = "LRT")
           anova_tab <- anova(model)
-        }
-        
-        
-        # if (input$engine == "afex::mixed") {
-        #   if (input$family == "gaussian") {
-        #     model <- mixed(f, data = df, method = "KR")
-        #     anova_tab <- anova(model, ddf = "Kenward-Roger", type = 3)
-        #   } else {
-        #     model <- mixed(f, data = df, family = family, method = "LRT")
-        #     # ,control = lmerControl(optCtrl = list(maxfun = 1e6)), 
-        #     # expand_re = TRUE)
-        #     anova_tab <- anova(model)
-        #   }
-        # } else if (input$engine == "lme4::glmer") {
-        #   model <- glmer(f, data = df, family = family,
-        #                  control = glmerControl(optimizer = "bobyqa",
-        #                                         optCtrl = list(maxfun = 2e5)))
-        #   anova_tab <- anova(model)
-        # }
-        
-        else if(input$engine == "nlme::lme") {
+        }else if(input$engine == "nlme::lme") {
           if (input$family != "gaussian")
             stop("nlme::lme only supports Gaussian models.")
           
@@ -646,21 +647,6 @@ server <- function(input, output, session) {
         }
         
         results[[custom_eq]] <- list(engine  = input$engine,formula = f_str, model = model, anova = anova_tab)
-        # if (input$engine == "nlme::lme") {
-        #   results[[custom_eq]] <- list(
-        #     fixed = fixed_str,
-        #     random = deparse(random_formula),
-        #     correlation = corr_used,
-        #     model = model,
-        #     anova = anova_tab
-        #   )
-        # } else {
-        #   results[[custom_eq]] <- list(
-        #     formula = f_str,
-        #     model = model,
-        #     anova = anova_tab
-        #   )
-        # }
       }, error = function(e) {
         results[[custom_eq]] <- list(formula = f_str, error = e$message)
       })
@@ -746,7 +732,7 @@ server <- function(input, output, session) {
             df <- prepare_nlme_data(df, subject_var)
             
             # --- Correlation handling ---
-            can_use_corr <- nlme_can_use_correlation(df, subject_var)
+            can_use_corr <- nlme_can_use_correlation(df, subject_var,input$time_var)
             
             suggested_corr <- suggest_correlation_structure(
               df,
@@ -798,42 +784,7 @@ server <- function(input, output, session) {
           }
           
           results[[iv]] <- list(engine  = input$engine,formula = f_str, model = model, anova = anova_tab)
-          
-          #random_formula  <- formula(model$modelStruct$reStruct)
-          
-          # cor_formula <- "none"
-          # 
-          # cs <- model$modelStruct$corStruct
-          # 
-          # if (!is.null(cs)) {
-          #   cor_formula <- tryCatch(
-          #     {
-          #       deparse(nlme::getCovariateFormula(cs))
-          #     },
-          #     error = function(e) {
-          #       deparse(formula(cs))
-          #     }
-          #   )
-          # }
-          # 
-          #  
-          #  if (input$engine == "nlme::lme") {
-          # results[[iv]] <- list(
-          #   engine      = "nlme::lme",
-          #   fixed       = fixed_str,
-          #   random      = random_formula,
-          #   correlation = cor_formula,
-          #   model       = model,
-          #   anova       = anova_tab
-          # )
-          # } else {
-          #   results[[iv]] <- list(
-          #     engine  = input$engine,
-          #     formula = f_str,
-          #     model = model,
-          #     anova = anova_tab
-          #   )
-          #  }
+
         }, error = function(e) {
           results[[iv]] <- list(formula = f_str, error = e$message)
         })
@@ -1107,48 +1058,6 @@ server <- function(input, output, session) {
     do.call(tabsetPanel, tabs)
   })
   
-  # observe({
-  #   results <- runModels()
-  #   req(results)
-  #   
-  #   for (nm in names(results)) {
-  #     local({
-  #       name <- nm
-  #       res  <- results[[name]]
-  #       
-  #       if (is.null(res$model)) return()
-  #       
-  #       model_obj <- res$model
-  #       safe_name <- make.names(name)
-  #       
-  #       # ---- model_performance ----
-  #       output[[paste0("perf_metrics_", safe_name)]] <- renderPrint({
-  #         tryCatch(
-  #           {
-  #             model_performance(model_obj)
-  #           },
-  #           error = function(e) {
-  #             paste("Performance metrics not available:", e$message)
-  #           }
-  #         )
-  #       })
-  #       
-  #       # ---- check_model plots ----
-  #       output[[paste0("check_model_", safe_name)]] <- renderPlot({
-  #         tryCatch(
-  #           {
-  #             check_model(model_obj)
-  #           },
-  #           error = function(e) {
-  #             plot.new()
-  #             text(0.5, 0.5, paste("check_model failed:", e$message))
-  #           }
-  #         )
-  #       })
-  #     })
-  #   }
-  # })
-  
   unwrap_model <- function(model) {
     
     # afex::mixed
@@ -1323,97 +1232,6 @@ server <- function(input, output, session) {
     
     do.call(tabsetPanel, tabs)
   })
-  
-  ##################################################################### 
-  # Model Diagnostics Without Convergence and Singularity check
-  ##################################################################### 
-  
-  # observe({
-  #   results <- runModels()
-  #   req(results)
-  #   
-  #   for (nm in names(results)) {
-  #     local({
-  #       name <- nm
-  #       res  <- results[[name]]
-  #       
-  #       if (is.null(res$model)) return()
-  #       
-  #       safe_name <- make.names(name)
-  #       model_obj <- unwrap_model(res$model)
-  #       
-  #       # ---- model_performance ----
-  #       
-  #       output[[paste0("perf_metrics_", safe_name)]] <- renderPrint({
-  #         tryCatch(
-  #           {
-  #             if (inherits(model_obj, "lme")) {
-  #               
-  #               # ---- SAFE nlme metrics ----
-  #               data.frame(
-  #                 AIC        = AIC(model_obj),
-  #                 BIC        = BIC(model_obj),
-  #                 logLik     = as.numeric(logLik(model_obj)),
-  #                 sigma      = model_obj$sigma,
-  #                 nobs       = nobs(model_obj)
-  #               )
-  #               
-  #             } else {
-  #               
-  #               # ---- lme4 / afex ----
-  #               performance::model_performance(model_obj)
-  #             }
-  #           },
-  #           error = function(e) {
-  #             paste("Performance metrics not available:", e$message)
-  #           }
-  #         )
-  #       })
-  #       
-  #       
-  #       # ---- check_model ----
-  #       output[[paste0("check_model_", safe_name)]] <- renderPlot({
-  #         tryCatch(
-  #           {
-  #             performance::check_model(model_obj)
-  #           },
-  #           error = function(e) {
-  #             plot.new()
-  #             text(0.5, 0.5, paste("check_model failed:", e$message))
-  #           }
-  #         )
-  #       })
-  #     })
-  #   }
-  # })
-  # 
-  
-  # output$performance_ui <- renderUI({
-  #   results <- runModels()
-  #   req(results)
-  #   
-  #   tabs <- lapply(names(results), function(nm) {
-  #     res <- results[[nm]]
-  #     if (is.null(res$model)) return(NULL)
-  #     
-  #     tabPanel(
-  #       nm,
-  #       h4("Model diagnostics"),
-  #       verbatimTextOutput(paste0("perf_metrics_", make.names(nm))),
-  #       hr(),
-  #       h4("Model checks"),
-  #       plotOutput(
-  #         paste0("check_model_", make.names(nm)),
-  #         height = "900px"
-  #       )
-  #       
-  #     )
-  #   })
-  #   
-  #   do.call(tabsetPanel, tabs)
-  # })
-  
-  
   
   # # ------------------------------------------------------------------
   # # Distribution fitting that runs ONLY for the selected dependent variable
