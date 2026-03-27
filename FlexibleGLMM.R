@@ -204,6 +204,15 @@ ui <- fluidPage(
                      
                      "- For feedback/queries, please send an email to ptalwar@uliege.be; talwar.puneet@gmail.com."
                      
+                 ),
+                 br(),
+                 
+                 # Add image here
+                 tags$div(
+                   style = "text-align:left;",
+                   tags$img(src = "GLMM_Table.jpg", 
+                            width = "80%", 
+                            style = "border-radius:10px; box-shadow: 2px 2px 10px #ccc;")
                  )
         ),
         tabPanel("Data", DTOutput("dataTable")),
