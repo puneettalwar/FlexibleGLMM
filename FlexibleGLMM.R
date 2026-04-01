@@ -34,39 +34,44 @@
 
 # Load libraries
 suppressPackageStartupMessages({
-library(shiny)
-#library(shinylogs) #  does not work on shinyapps.io
-library(readr)
-library(readxl)
-library(DT)
-library(shinyjs)
-library(afex)
-library(lme4)
-library(emmeans)
-library(SuppDists)
-library(goft)
-library(parameters)
-library(modelsummary)
-library(mctest)
-library(dataPreparation)
-library(ggplot2)
-library(nlme)
-library(knitr)
-library(future)
-library(performance)
-library(predictmeans)
-#library(HLMdiag)
-#library(sjPlot)
-#library(JWileymisc)
-#library(multilevelTools)
+  library(shiny)
+  #library(shinylogs) #  does not work on shinyapps.io
+  library(readr)
+  library(readxl)
+  library(DT)
+  library(shinyjs)
+  library(afex)
+  library(lme4)
+  library(emmeans)
+  library(SuppDists)
+  library(goft)
+  library(parameters)
+  library(modelsummary)
+  library(mctest)
+  library(dataPreparation)
+  library(ggplot2)
+  library(nlme)
+  library(knitr)
+  library(future)
+  library(performance)
+  library(predictmeans)
+  library(effectsize)
+  library(influence.ME)
+  library(DHARMa)
+  library(lookout)
+  library(rmarkdown)
+  library(broom.mixed)
+  library(stats)
 })
 
 
 options(width = 200)
 options(shiny.maxRequestSize=30*1024^2) # Maximum upload file size 30 MB
 
+#*****************************
+# UI 
+#*****************************
 
-# UI -----------------------------
 ui <- fluidPage(
   useShinyjs(),
   titlePanel("Flexible GLMM Toolbox"),
@@ -102,11 +107,29 @@ ui <- fluidPage(
       verbatimTextOutput("dimAfter"),
       verbatimTextOutput("missingDataCheck"),
       hr(),
+    
+      selectInput("outlier_method", "Outlier Detection Method",
+                  choices = c("None",
+                              "Z-score (SD cutoff)",
+                              "Cook's Distance",
+                              "Mahalanobis Distance",
+                              "LOOCV KDE (lookout)")
+      ),
       
-      numericInput("n_sigmas", "SD cutoff for Outlier Removal (leave empty to skip)", value = NA, min = 1),
+      numericInput("n_sigmas", "SD cutoff (Z-score)", value = NA, min = 1),
+      numericInput("cook_cutoff", "Cook's Distance cutoff (default = 4/n)", value = NA),
+      numericInput("mahal_cutoff", "Mahalanobis cutoff (Chi-square quantile, e.g. 0.99)", value = 0.99, min = 0.5, max = 0.999),
       actionButton("remove_outliers", "Remove Outliers"),
       verbatimTextOutput("dimAfterOutlierRemoval"),
       downloadButton("download_no_outliers", "Download Cleaned CSV"),
+
+      # numericInput("n_sigmas", "SD cutoff for Outlier Removal (leave empty to skip)", value = NA, min = 1),
+      # actionButton("remove_outliers", "Remove Outliers"),
+      # verbatimTextOutput("dimAfterOutlierRemoval"),
+      # downloadButton("download_no_outliers", "Download Cleaned CSV"),
+      # hr(),
+      # checkboxInput("use_lookout", "Use MD outlier detection (mahalanobis)", FALSE),
+      # actionButton("run_lookout", "Detect outliers"),
       hr(),
       p("Multiple y and x inputs are allowed"),
       uiOutput("yInput"),
@@ -162,7 +185,6 @@ ui <- fluidPage(
       textInput("group_var","Optional Random Grouping variable for Auto correlation (e.g., Subject)"),
       textInput("time_var","Optional Time variable for AR structures (e.g., trial, block, day, session)"),
       hr(),
-      
       uiOutput("posthoc_vars_ui"),
       textInput("custom_eq", "Custom model equation (overrides auto)", value = ""),
       actionButton("run", "Run Models")
@@ -252,14 +274,22 @@ ui <- fluidPage(
                  plotOutput("corr_plot"),
                  verbatimTextOutput("corr_stats"),
                  downloadButton("download_corr_plot", "Download Correlation Plot")
+        ),
+        tabPanel("Diagnostics",
+                 uiOutput("diagnostics_ui")
+        ),
+        tabPanel("Auto Report",
+                 downloadButton("download_report", "Download HTML Report")
         )
       )
     )
   )
 )
 
+#*****************************
+# SERVER 
+#*****************************
 
-# SERVER -------------------------
 server <- function(input, output, session) {
   
   rv <- reactiveValues(
@@ -268,7 +298,10 @@ server <- function(input, output, session) {
     models = NULL
   )
   
+  #----------------------
   # Upload
+  #----------------------
+  
   observe({
     req(input$data_file)
     ext <- tools::file_ext(input$data_file$name)
@@ -282,7 +315,10 @@ server <- function(input, output, session) {
     rv$selected_data <- rv$data
   })
   
+  #----------------------
   # Column selector
+  #----------------------
+  
   output$select_columns_ui <- renderUI({
     req(rv$data)
     checkboxGroupInput("selected_columns", "Select Columns to Keep:",
@@ -294,7 +330,10 @@ server <- function(input, output, session) {
     showNotification("Column selection applied", type = "message")
   })
   
+  #----------------------
   # Variable types
+  #----------------------
+  
   output$factor_vars_ui <- renderUI({
     req(rv$selected_data)
     selectInput("factor_vars", "Categorical Variables",
@@ -339,8 +378,10 @@ server <- function(input, output, session) {
     showNotification("Variable types & preprocessing applied", type = "message")
   })
   
-  
+  #----------------------
   # Remove missing values
+  #----------------------
+  
   observeEvent(input$remove_missing, {
     df <- rv$selected_data
     output$dimBefore <- renderText({ paste("Before:", paste(dim(df), collapse = " x ")) })
@@ -354,19 +395,105 @@ server <- function(input, output, session) {
     })
   })
   
+  # # Outlier removal
+  # observeEvent(input$remove_outliers, {
+  #   df <- if (is.null(rv$cleaned_data)) rv$selected_data else rv$cleaned_data
+  #   if (!is.na(input$n_sigmas)) {
+  #     z <- scale(df[sapply(df, is.numeric)])
+  #     keep <- apply(abs(z) < input$n_sigmas, 1, all)
+  #     rv$data_no_outliers <- df[keep, ]
+  #     output$dimAfterOutlierRemoval <- renderText({
+  #       paste("After outlier removal:", paste(dim(rv$data_no_outliers), collapse = " x "))
+  #     })
+  #   }
+  # })
+ 
+  #----------------------
   # Outlier removal
+  #----------------------
+  
   observeEvent(input$remove_outliers, {
+    
     df <- if (is.null(rv$cleaned_data)) rv$selected_data else rv$cleaned_data
-    if (!is.na(input$n_sigmas)) {
-      z <- scale(df[sapply(df, is.numeric)])
+    req(df)
+    
+    method <- input$outlier_method
+    df_num <- df[sapply(df, is.numeric)]
+    
+    keep <- rep(TRUE, nrow(df))  # default: keep all
+    
+    # --- 1. Z-score method ---
+    if (method == "Z-score (SD cutoff)" && !is.na(input$n_sigmas)) {
+      z <- scale(df_num)
       keep <- apply(abs(z) < input$n_sigmas, 1, all)
-      rv$data_no_outliers <- df[keep, ]
-      output$dimAfterOutlierRemoval <- renderText({
-        paste("After outlier removal:", paste(dim(rv$data_no_outliers), collapse = " x "))
-      })
     }
+    
+    # --- 2. Cook's Distance ---
+    if (method == "Cook's Distance") {
+      try({
+        formula <- as.formula(
+          #paste(names(df_num)[1], "~", paste(names(df_num)[-1], collapse = "+"))
+          paste(names(df_num)[1], "~", paste(names(df_num)[2], collapse = "+"))
+        )
+        model <- lm(formula, data = df_num)
+        
+        cooks_d <- cooks.distance(model)
+        cutoff <- ifelse(is.na(input$cook_cutoff), 4 / nrow(df_num), input$cook_cutoff)
+        
+        keep <- cooks_d < cutoff
+      }, silent = TRUE)
+    }
+    
+    # --- 3. Mahalanobis Distance ---
+    if (method == "Mahalanobis Distance") {
+      try({
+        center <- colMeans(df_num, na.rm = TRUE)
+        cov_mat <- cov(df_num, use = "complete.obs")
+        
+        md <- mahalanobis(df_num, center, cov_mat)
+        
+        cutoff <- qchisq(input$mahal_cutoff, df = ncol(df_num))
+        keep <- md < cutoff
+      }, silent = TRUE)
+    }
+    
+    # --- 4. Lookout (LOOCV-based Outlier Detection) ---
+    if (method == "LOOCV KDE (lookout)") {
+      try({
+        library(lookout)
+        
+        # lookout expects a numeric matrix
+        df_mat <- as.matrix(na.omit(df_num))
+        
+        # Run lookout
+        res <- lookout(df_mat)
+        
+        # res$rank gives ordering (higher = more outlier)
+        scores <- res$rank
+        
+        # Define threshold (top 5% most outlying points)
+        cutoff <- quantile(scores, probs = 0.95, na.rm = TRUE)
+        
+        keep_sub <- scores < cutoff  # keep non-outliers
+        
+        # Map back to original rows (handle NA rows properly)
+        keep <- rep(TRUE, nrow(df_num))
+        keep[complete.cases(df_num)] <- keep_sub
+        
+      }, silent = TRUE)
+    }
+    
+    # Apply filtering
+    rv$data_no_outliers <- df[keep, , drop = FALSE]
+    
+    output$dimAfterOutlierRemoval <- renderText({
+      paste("After outlier removal:",
+            paste(dim(rv$data_no_outliers), collapse = " x "),
+            "| Removed:", sum(!keep))
+    })
   })
   
+
   output$download_no_outliers <- downloadHandler(
     filename = function() {
       paste0("cleaned_no_outliers_", Sys.Date(), ".csv")
@@ -377,7 +504,10 @@ server <- function(input, output, session) {
     }
   )
   
+  #----------------------
   # Inputs
+  #----------------------
+  
   observe({
     req(rv$selected_data)
     df <- if (!is.null(rv$data_no_outliers)) rv$data_no_outliers else 
@@ -404,7 +534,7 @@ server <- function(input, output, session) {
   })
   
   # -------------------------------
-  # nlme helpers (TIME-AWARE FINAL)
+  # nlme helpers (TIME-AWARE)
   # -------------------------------
   
   get_nlme_subject <- function(random_formula) {
@@ -515,15 +645,17 @@ server <- function(input, output, session) {
     gsub("\\+?\\s*\\([^\\)]*\\|[^\\)]*\\)", "", formula_string)
   }
   
-  
+  #----------------------
   # Run models
+  #----------------------
+  
   runModels <- eventReactive(input$run, {
     #req(rv$selected_data, input$y, input$x, input$random_effects)
     req(rv$selected_data, input$y)
     df <- if (!is.null(rv$data_no_outliers)) rv$data_no_outliers else 
       if (!is.null(rv$cleaned_data)) rv$cleaned_data else rv$selected_data
     
-
+    
     # Family + link function builder
     get_family <- function(fam, linkfun) {
       if (linkfun == "default") {
@@ -793,7 +925,7 @@ server <- function(input, output, session) {
           }
           
           results[[iv]] <- list(engine  = input$engine,formula = f_str, model = model, anova = anova_tab)
-
+          
         }, error = function(e) {
           results[[iv]] <- list(formula = f_str, error = e$message)
         })
@@ -804,7 +936,10 @@ server <- function(input, output, session) {
     results
   })
   
+  #----------------------
   # Outputs
+  #----------------------
+  
   output$dataTable <- renderDT({
     req(rv$data)
     datatable(rv$data, options = list(scrollX = TRUE, pageLength = 25))
@@ -824,9 +959,9 @@ server <- function(input, output, session) {
     ))
   })
   
-  output$processed_table <- DT::renderDT({
-    rv$processed_data    
-  })
+  # output$processed_table <- DT::renderDT({
+  #   rv$processed_data    
+  # })
   
   output$processed_table <- DT::renderDT({
     DT::datatable(
@@ -842,7 +977,90 @@ server <- function(input, output, session) {
     )
   })
   
-  #datatable(df, options = list(scrollX = TRUE, pageLength = 20))
+  #----------------------
+  # Effect size calculation
+  #----------------------
+  
+  extract_effect_sizes <- function(model) {
+    
+    model_unwrapped <- unwrap_model(model)
+    
+    out <- NULL
+    
+    # ---- Case 1: afex ----
+    if (inherits(model, "mixed")) {
+      
+      aov_tab <- tryCatch(anova(model), error = function(e) NULL)
+      
+      if (!is.null(aov_tab)) {
+        es <- tryCatch(
+          effectsize::eta_squared(aov_tab, partial = TRUE),
+          error = function(e) NULL
+        )
+        
+        if (!is.null(es)) {
+          out <- as.data.frame(es)
+        }
+      }
+    }
+    
+    # ---- Case 2: lme4 / nlme ----
+    else if (inherits(model_unwrapped, c("lmerMod","glmerMod","lme"))) {
+      
+      std_params <- tryCatch(
+        parameters::standardize_parameters(model_unwrapped),
+        error = function(e) NULL
+      )
+      
+      if (!is.null(std_params) && nrow(std_params) > 0) {
+        out <- as.data.frame(std_params)
+      }
+      
+      if (inherits(model_unwrapped, "lme")) {
+        
+        coefs <- summary(model_unwrapped)$tTable
+        
+        out <- data.frame(
+          Parameter = rownames(coefs),
+          Estimate  = coefs[, "Value"],
+          SE        = coefs[, "Std.Error"],
+          DF        = coefs[, "DF"],
+          t_value   = coefs[, "t-value"],
+          p_value   = coefs[, "p-value"]
+        )
+        
+      } else {
+        
+        coefs <- summary(model_unwrapped)$coefficients
+        
+        out <- data.frame(
+          Parameter = rownames(coefs),
+          Estimate  = coefs[,1],
+          SE        = coefs[,2]
+        )
+      }
+      
+      if (is.null(out)) {
+        message("Effect size extraction failed for model: ", class(model_unwrapped))
+      }
+      
+      # ---- SAFE R2 ATTACH ----
+      r2 <- tryCatch(
+        performance::r2(model_unwrapped),
+        error = function(e) NULL
+      )
+      
+      if (!is.null(out) && !is.null(r2)) {
+        attr(out, "R2") <- r2
+      }
+    }
+    
+    return(out)
+  }
+  
+  #----------------------
+  # Model output
+  #----------------------
   
   output$modelOutput <- renderPrint({
     results <- runModels()
@@ -861,18 +1079,35 @@ server <- function(input, output, session) {
         cat("Fixed:", res$fixed, "\n")
         cat("Random:", res$random, "\n")
         cat("Correlation:", res$correlation, "\n")
-        
       }
-      
-      
       if (!is.null(res$model)) {
-        
         print(summary(res$model))
-        #vcov(summary(res$model)))
+        cat("\n=== Effect Sizes ===\n")
+        
+        es <- extract_effect_sizes(res$model)
+        
+        if (!is.null(es)) {
+          print(es)
+          
+          r2 <- attr(es, "R2")
+          if (!is.null(r2)) {
+            cat("\n--- R-squared ---\n")
+            print(r2)
+          }
+        } else {
+          cat("Effect size not available for this model\n")
+        }
         
         if (inherits(res$model, "lme")) {
           cat("\nCorrelation structure:\n")
           print(res$model$modelStruct$corStruct)
+          
+          r2 <- tryCatch(performance::r2(res$model), error = function(e) NULL)
+          
+          if (!is.null(r2)) {
+            cat("\n--- R-squared ---\n")
+            print(r2)
+          }
         }
         
       } else {
@@ -881,6 +1116,9 @@ server <- function(input, output, session) {
     }
   })
   
+  #----------------------
+  # ANOVA output
+  #----------------------
   
   output$anovaOutput <- renderPrint({
     results <- runModels()
@@ -910,6 +1148,9 @@ server <- function(input, output, session) {
     }
   })
   
+  # ------------------------------------------------------------------
+  # POSTHOC - pairwise comparisons
+  # ------------------------------------------------------------------
   
   output$emmeansOutput <- renderPrint({
     results <- runModels()
@@ -978,30 +1219,133 @@ server <- function(input, output, session) {
     }
   })
   
+  
+  # ------------------------------------------------------------------
+  # DHARMa INTEGRATION for GLMM
+  # ------------------------------------------------------------------
+  
+  observe({
+    results <- runModels()
+    req(results)
+    
+    for (nm in names(results)) {
+      local({
+        safe_name <- make.names(nm)
+        res <- results[[nm]]
+        
+        if (is.null(res$model)) return()
+        
+        model_obj <- unwrap_model(res$model)
+        
+        output[[paste0("dharma_", safe_name)]] <- renderPlot({
+          
+          if (!inherits(model_obj, c("glmerMod","lmerMod"))) {
+            plot.new()
+            text(0.5,0.5,"DHARMa not available")
+            return()
+          }
+          
+          sim_res <- DHARMa::simulateResiduals(model_obj, n = 500)
+          plot(sim_res)
+        })
+        
+        output[[paste0("dharma_tests_", safe_name)]] <- renderPrint({
+          
+          model_obj <- unwrap_model(res$model)
+          
+          if (!inherits(model_obj, c("glmerMod","lmerMod"))) {
+            cat("DHARMa tests not available\n")
+            return()
+          }
+          
+          sim_res <- simulateResiduals(model_obj, n = 500)
+          
+          cat("=== DHARMa Diagnostics ===\n")
+          
+          print(testUniformity(sim_res))
+          print(testDispersion(sim_res))
+          print(testOutliers(sim_res))
+          
+          if (family(model_obj)$family == "poisson") {
+            print(testZeroInflation(sim_res))
+          }
+        })
+      })
+    }
+  })  
+  
+  # ---------------------------------
+  # Effect size output
+  # ---------------------------------
+  
   extract_table <- function(model) {
     
+    model_unwrapped <- unwrap_model(model)
+    
+    # ---- afex ----
     if (inherits(model, "mixed")) {
-      out <- as.data.frame(anova(model))
-      out$Effect <- rownames(out)
-      rownames(out) <- NULL
-      out
       
-    } else if (inherits(model, "glmerMod") || inherits(model, "lme")) {
-      broom.mixed::tidy(model, effects = "fixed")
+      tab <- as.data.frame(anova(model))
+      tab$Effect <- rownames(tab)
+      rownames(tab) <- NULL
       
-    } else {
-      NULL
+      es <- tryCatch(
+        effectsize::eta_squared(tab, partial = TRUE),
+        error = function(e) NULL
+      )
+      
+      if (!is.null(es)) {
+        tab <- dplyr::left_join(tab, es, by.x = "Effect", by.y = "Parameter", all.x = TRUE)
+      }
+      
+      return(tab)
     }
+    
+    # ---- lme4 / nlme ----
+    else if (inherits(model_unwrapped, c("glmerMod","lmerMod","lme"))) {
+      
+      if (inherits(model_unwrapped, "lme")) {
+        
+        coefs <- summary(model_unwrapped)$tTable
+        
+        tab <- data.frame(
+          term      = rownames(coefs),
+          estimate  = coefs[, "Value"],
+          std.error = coefs[, "Std.Error"],
+          statistic = coefs[, "t-value"],
+          p.value   = coefs[, "p-value"]
+        )
+        
+      } else {
+        
+        tab <- broom.mixed::tidy(model_unwrapped, effects = "fixed")
+      }
+      
+      r2 <- tryCatch(performance::r2(model_unwrapped), error = function(e) NULL)
+      
+      if (!is.null(r2)) {
+        attr(tab, "R2") <- r2
+      }
+      
+      # Standardized coefficients
+      std <- tryCatch(
+        parameters::standardize_parameters(model_unwrapped),
+        error = function(e) NULL
+      )
+      
+      if (!is.null(std) && nrow(std) > 0) {
+        
+        std <- std[, c("Parameter","Std_Coefficient","CI_low","CI_high")]
+        names(std) <- c("term","Std_Beta","Std_CI_low","Std_CI_high")
+        
+        tab <- merge(tab, std, by = "term", all.x = TRUE)
+      }
+      
+      return(tab)
+    }
+    
+    NULL
   }
-  
-  clean_names <- function(df) {
-    dplyr::rename_with(
-      df,
-      ~ gsub("\\.", " ", tools::toTitleCase(.x))
-    )
-  }
-  
-  
   
   format_table <- function(df) {
     df |>
@@ -1010,6 +1354,10 @@ server <- function(input, output, session) {
       )
   }
   
+  
+  # ---------------------------------
+  # Output Table
+  # ---------------------------------
   
   observe({
     results <- runModels()
@@ -1126,6 +1474,10 @@ server <- function(input, output, session) {
     "OK"
   }
   
+  # ------------------------------------------------------------------
+  # MODEL PERFORMANCE 
+  # ------------------------------------------------------------------
+  
   observe({
     results <- runModels()
     req(results)
@@ -1160,7 +1512,7 @@ server <- function(input, output, session) {
           
           cat("Convergence:", convergence, "\n")
         })
-    
+        
         # ---- Performance metrics ----
         output[[paste0("perf_metrics_", safe_name)]] <- renderPrint({
           
@@ -1178,7 +1530,7 @@ server <- function(input, output, session) {
         })
         
         output[[paste0("check_model_", safe_name)]] <- renderPlot({
-
+          
           if (inherits(model_obj, "lme")) {
             #nlme::plot.lme(model_obj, resid(., type = "p") ~ fitted(.))
             #multilevelTools::modelDiagnostics(model_obj)
@@ -1208,8 +1560,11 @@ server <- function(input, output, session) {
       })
     }
   })     
-        
-        
+  
+  # ------------------------------------------------------------------
+  # PERFORMANCE UI
+  # ------------------------------------------------------------------
+  
   output$performance_ui <- renderUI({
     results <- runModels()
     req(results)
@@ -1242,9 +1597,164 @@ server <- function(input, output, session) {
     do.call(tabsetPanel, tabs)
   })
   
-  # # ------------------------------------------------------------------
-  # # Distribution fitting that runs ONLY for the selected dependent variable
-  # # ------------------------------------------------------------------
+
+  # ------------------------------------------------------------------
+  # UNIFIED DIAGNOSTICS UI
+  # ------------------------------------------------------------------
+  
+  observe({
+    
+    results <- runModels()
+    req(results)
+    
+    df <- if (is.null(rv$cleaned_data)) rv$selected_data else rv$cleaned_data
+    df_num <- df[sapply(df, is.numeric)]
+    
+    lapply(names(results), function(nm) {
+      
+      safe <- make.names(nm)
+      
+  # ---------------------------
+  # Cook's Distance Plot
+  # ---------------------------
+ 
+   output[[paste0("cooks_", safe)]] <- renderPlot({
+        
+      try({
+          
+        req(ncol(df_num) > 1)
+          
+        formula <- as.formula(
+          #paste(names(df_num)[1], "~", paste(names(df_num)[-1], collapse = "+"))
+          paste(names(df_num)[1], "~", paste(names(df_num)[2], collapse = "+"))
+          )
+          
+        model <- lm(formula, data = df_num)
+          
+        cooks_d <- cooks.distance(model)
+        cutoff <- 4 / length(cooks_d)
+          
+        plot(cooks_d, type = "h",
+           main = "Cook's Distance",
+           sub = paste("Model:", deparse(formula)),
+           ylab = "Distance", xlab = "Observation")
+          
+        abline(h = cutoff, lty = 2)
+          
+        # highlight outliers
+          points(which(cooks_d > cutoff),
+                 cooks_d[cooks_d > cutoff],
+                 pch = 19)
+          
+        }, silent = TRUE)
+        
+      })
+      
+      # ---------------------------
+      # Mahalanobis Plot
+      # ---------------------------
+      output[[paste0("mahal_", safe)]] <- renderPlot({
+        
+        try({
+          
+          req(ncol(df_num) > 1)
+          
+          df_complete <- na.omit(df_num)
+          
+          center <- colMeans(df_complete)
+          cov_mat <- cov(df_complete)
+          
+          md <- mahalanobis(df_complete, center, cov_mat)
+          
+          cutoff <- qchisq(0.99, df = ncol(df_complete))
+          
+          plot(md,
+               main = "Mahalanobis Distance",
+               ylab = "Distance", xlab = "Observation")
+          
+          abline(h = cutoff, lty = 2)
+          
+          # highlight outliers
+          outliers <- which(md > cutoff)
+          points(outliers, md[outliers], pch = 19)
+          
+        }, silent = TRUE)
+        
+      })
+      
+    })
+  })
+
+  output$diagnostics_ui <- renderUI({
+    
+    results <- runModels()
+    req(results)
+    
+    tabs <- lapply(names(results), function(nm) {
+      
+      safe <- make.names(nm)
+      
+      tabPanel(nm,
+               h4("Cook's Distance [Default cutoff]"),
+               plotOutput(paste0("cooks_", safe), height = "300px"),
+               hr(),
+               h4("Mahalanobis Distance [Default cutoff]"),
+               plotOutput(paste0("mahal_", safe), height = "300px"),   
+               hr(),
+               h4("DHARMa Residual Diagnostics"),
+               plotOutput(paste0("dharma_", safe), height = "400px"),
+               verbatimTextOutput(paste0("dharma_tests_", safe))
+      )
+    })
+    
+    do.call(tabsetPanel, tabs)
+  })
+  
+  
+  # ------------------------------------------------------------------
+  # AUTO-REPORT GENERATION 
+  # ------------------------------------------------------------------
+  
+  output$download_report <- downloadHandler(
+    
+    filename = function() {
+      paste0("GLMM_report_", Sys.Date(), ".html")
+    },
+    
+    content = function(file) {
+      
+      results <- runModels()
+      req(results)
+      
+      # Use first model (can extend later)
+      res <- results[[1]]
+      
+      model_obj <- unwrap_model(res$model)
+      
+      dharma_obj <- NULL
+      if (inherits(model_obj, c("glmerMod","lmerMod"))) {
+        dharma_obj <- simulateResiduals(model_obj)
+      }
+      
+      rmarkdown::render(
+        "report_template.Rmd",
+        output_file = file,
+        params = list(
+          model = model_obj,
+          anova = res$anova,
+          formula = res$formula,
+          engine = res$engine,
+          family = input$family,
+          dharma = dharma_obj
+        ),
+        envir = new.env(parent = globalenv())
+      )
+    }
+  )
+  
+  # ------------------------------------------------------------------
+  # Distribution fitting that runs ONLY for the selected dependent variable
+  # ------------------------------------------------------------------
   
   
   observeEvent(input$fit_distribution, {
@@ -1282,7 +1792,7 @@ server <- function(input, output, session) {
       Weibull   = fw
     )
     
-    # â¶ Log output for FitDist Output tab
+    # Log output for FitDist Output tab
     logs <- c(
       paste0("===== Dependent Variable: ", varname, " ====="),
       "",
