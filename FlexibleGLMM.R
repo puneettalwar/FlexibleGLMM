@@ -62,6 +62,7 @@ suppressPackageStartupMessages({
   library(rmarkdown)
   library(broom.mixed)
   library(stats)
+  library(r2glmm)
 })
 
 
@@ -113,7 +114,8 @@ ui <- fluidPage(
                               "Z-score (SD cutoff)",
                               "Cook's Distance",
                               "Mahalanobis Distance",
-                              "LOOCV KDE (lookout)")
+                              "LOOCV KDE (lookout)",
+                              "DHARMa")
       ),
       
       numericInput("n_sigmas", "SD cutoff (Z-score)", value = NA, min = 1),
@@ -483,6 +485,46 @@ server <- function(input, output, session) {
       }, silent = TRUE)
     }
     
+    # --- 5. DHARMa Outliers ---
+    if (method == "DHARMa Outliers") {
+      try({
+        req(rv$models)  # assuming models already exist
+        
+        # Use first model (or adapt to selected model)
+        model_obj <- unwrap_model(rv$models[[1]]$model)
+        
+        if (!inherits(model_obj, c("glmerMod","lmerMod"))) {
+          warning("DHARMa requires mixed models")
+        } else {
+          
+          library(DHARMa)
+          
+          sim_res <- simulateResiduals(model_obj, n = 500)
+          
+          # Run outlier test
+          out_test <- testOutliers(sim_res)
+          
+          # Extract outlier flags
+          # DHARMa stores them internally as logical vector
+          outlier_flags <- out_test$outliers
+          
+          # Fallback if structure differs
+          if (is.null(outlier_flags)) {
+            # alternative extraction (robust fallback)
+            res_vals <- sim_res$scaledResiduals
+            outlier_flags <- (res_vals < 0.025 | res_vals > 0.975)
+          }
+          
+          # keep <- !outlier_flags
+          
+          keep <- rep(TRUE, nrow(df))
+          
+          model_rows <- as.numeric(rownames(model.frame(model_obj)))
+          keep[model_rows] <- !outlier_flags
+        }
+        
+      }, silent = TRUE)
+    }
     # Apply filtering
     rv$data_no_outliers <- df[keep, , drop = FALSE]
     
@@ -984,7 +1026,6 @@ server <- function(input, output, session) {
   extract_effect_sizes <- function(model) {
     
     model_unwrapped <- unwrap_model(model)
-    
     out <- NULL
     
     # ---- Case 1: afex ----
@@ -1007,41 +1048,31 @@ server <- function(input, output, session) {
     # ---- Case 2: lme4 / nlme ----
     else if (inherits(model_unwrapped, c("lmerMod","glmerMod","lme"))) {
       
-      std_params <- tryCatch(
-        parameters::standardize_parameters(model_unwrapped),
+      # ---- NEW: r2glmm EFFECT SIZES ----
+      r2beta_res <- tryCatch(
+        r2glmm::r2beta(model_unwrapped, method = "nsj", partial = TRUE),
         error = function(e) NULL
       )
       
-      if (!is.null(std_params) && nrow(std_params) > 0) {
-        out <- as.data.frame(std_params)
-      }
-      
-      if (inherits(model_unwrapped, "lme")) {
+      if (!is.null(r2beta_res)) {
         
-        coefs <- summary(model_unwrapped)$tTable
+        out <- as.data.frame(r2beta_res)
         
-        out <- data.frame(
-          Parameter = rownames(coefs),
-          Estimate  = coefs[, "Value"],
-          SE        = coefs[, "Std.Error"],
-          DF        = coefs[, "DF"],
-          t_value   = coefs[, "t-value"],
-          p_value   = coefs[, "p-value"]
-        )
+        # Clean column names for Shiny display
+        colnames(out) <- gsub("\\.", "_", colnames(out))
         
       } else {
+        message("r2glmm failed, falling back to standard parameters")
         
-        coefs <- summary(model_unwrapped)$coefficients
-        
-        out <- data.frame(
-          Parameter = rownames(coefs),
-          Estimate  = coefs[,1],
-          SE        = coefs[,2]
+        # ---- fallback ----
+        std_params <- tryCatch(
+          parameters::standardize_parameters(model_unwrapped),
+          error = function(e) NULL
         )
-      }
-      
-      if (is.null(out)) {
-        message("Effect size extraction failed for model: ", class(model_unwrapped))
+        
+        if (!is.null(std_params) && nrow(std_params) > 0) {
+          out <- as.data.frame(std_params)
+        }
       }
       
       # ---- SAFE R2 ATTACH ----
@@ -1239,7 +1270,7 @@ server <- function(input, output, session) {
         
         output[[paste0("dharma_", safe_name)]] <- renderPlot({
           
-          if (!inherits(model_obj, c("glmerMod","lmerMod"))) {
+          if (!inherits(model_obj, c("glmerMod","lmerMod","lme"))) {
             plot.new()
             text(0.5,0.5,"DHARMa not available")
             return()
@@ -1264,7 +1295,11 @@ server <- function(input, output, session) {
           
           print(testUniformity(sim_res))
           print(testDispersion(sim_res))
-          print(testOutliers(sim_res))
+          
+          out_test <- testOutliers(sim_res)
+          print(out_test)
+          
+          cat("\nNumber of outliers:", sum(out_test$outliers, na.rm = TRUE), "\n")
           
           if (family(model_obj)$family == "poisson") {
             print(testZeroInflation(sim_res))
