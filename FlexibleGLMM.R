@@ -81,24 +81,13 @@ ui <- fluidPage(
     sidebarPanel(
       fileInput("data_file","Upload Data Frame (CSV or Excel)", 
                 accept = c(".csv", ".xlsx")),
-      
-      hr(),
       p("Select columns to include or exclude from analysis:"),
       uiOutput("select_columns_ui"),
       actionButton("apply_column_selection", "Apply Column Selection"),
       hr(),
-      
       uiOutput("factor_vars_ui"),
       uiOutput("numeric_vars_ui"),
-      radioButtons("center_scale_mode", "Numeric preprocessing",
-                   choices = c("Center and scale" = "center_scale",
-                               "Center only" = "center_only",
-                               "Scale only" = "scale_only",
-                               "None" = "none"),
-                   selected = "center_scale"),
       actionButton("apply_var_types", "Apply Variable Types"),
-      
-      actionButton("open_data_view", "View Processed Data"),
       hr(),
       radioButtons("missing_value", "Missing Value Treatment", 
                    choices = c("Remove rows with NA" = "NA"),
@@ -108,7 +97,6 @@ ui <- fluidPage(
       verbatimTextOutput("dimAfter"),
       verbatimTextOutput("missingDataCheck"),
       hr(),
-    
       selectInput("outlier_method", "Outlier Detection Method",
                   choices = c("None",
                               "Z-score (SD cutoff)",
@@ -117,21 +105,23 @@ ui <- fluidPage(
                               "LOOCV KDE (lookout)",
                               "DHARMa")
       ),
-      
       numericInput("n_sigmas", "SD cutoff (Z-score)", value = NA, min = 1),
       numericInput("cook_cutoff", "Cook's Distance cutoff (default = 4/n)", value = NA),
       numericInput("mahal_cutoff", "Mahalanobis cutoff (Chi-square quantile, e.g. 0.99)", value = 0.99, min = 0.5, max = 0.999),
       actionButton("remove_outliers", "Remove Outliers"),
       verbatimTextOutput("dimAfterOutlierRemoval"),
       downloadButton("download_no_outliers", "Download Cleaned CSV"),
-
-      # numericInput("n_sigmas", "SD cutoff for Outlier Removal (leave empty to skip)", value = NA, min = 1),
-      # actionButton("remove_outliers", "Remove Outliers"),
-      # verbatimTextOutput("dimAfterOutlierRemoval"),
-      # downloadButton("download_no_outliers", "Download Cleaned CSV"),
-      # hr(),
-      # checkboxInput("use_lookout", "Use MD outlier detection (mahalanobis)", FALSE),
-      # actionButton("run_lookout", "Detect outliers"),
+      hr(),
+      uiOutput("standardize_vars_ui"),
+      uiOutput("standardize_vars"),
+      radioButtons("center_scale_mode", "Numeric preprocessing",
+                   choices = c("Center and scale" = "center_scale",
+                               "Center only" = "center_only",
+                               "Scale only" = "scale_only",
+                               "None" = "none"),
+                   selected = "center_scale"),
+      actionButton("apply_standardization", "Apply data standardization"),
+      actionButton("open_data_view", "View Processed Data"),
       hr(),
       p("Multiple y and x inputs are allowed"),
       uiOutput("yInput"),
@@ -338,47 +328,53 @@ server <- function(input, output, session) {
   
   output$factor_vars_ui <- renderUI({
     req(rv$selected_data)
-    selectInput("factor_vars", "Categorical Variables",
-                choices = names(rv$selected_data), multiple = TRUE)
-  })
-  output$numeric_vars_ui <- renderUI({
-    req(rv$selected_data)
-    selectInput("numeric_vars", "Numeric Variables",
-                choices = names(rv$selected_data), multiple = TRUE)
+    selectInput(
+      "factor_vars",
+      "Categorical Variables",
+      choices = names(rv$selected_data),
+      multiple = TRUE
+    )
   })
   
+  output$numeric_vars_ui <- renderUI({
+    req(rv$selected_data)
+    selectInput(
+      "numeric_vars",
+      "Numeric Variables",
+      choices = names(rv$selected_data),
+      multiple = TRUE
+    )
+  })
+  
+  # Apply variable types
   observeEvent(input$apply_var_types, {
     req(rv$selected_data)
+    
     df <- rv$selected_data
     
-    # Factors
+    # Convert to factors
     if (!is.null(input$factor_vars)) {
-      for (v in input$factor_vars) 
+      for (v in input$factor_vars) {
         df[[v]] <- as.factor(df[[v]])
-    }
-    
-    # Numeric
-    if (!is.null(input$numeric_vars)) {
-      for (v in input$numeric_vars) {
-        df[[v]] <- suppressWarnings(as.numeric(df[[v]]))
-        
-        if (input$center_scale_mode == "center_scale") {
-          df[[paste0(v, "_cs")]] <- as.numeric(scale(df[[v]], center = TRUE, scale = TRUE))
-        }
-        else if (input$center_scale_mode == "center_only") {
-          df[[paste0(v, "_c")]] <- df[[v]] - mean(df[[v]], na.rm = TRUE)
-        }
-        else if (input$center_scale_mode == "scale_only") {
-          df[[paste0(v, "_s")]] <- df[[v]] / sd(df[[v]], na.rm = TRUE)
-        }
       }
     }
     
-    rv$processed_data <- df      # <-- store the augmented data
-    rv$selected_data <- df
+    # Convert to numeric
+    if (!is.null(input$numeric_vars)) {
+      for (v in input$numeric_vars) {
+        df[[v]] <- suppressWarnings(as.numeric(df[[v]]))
+      }
+    }
     
-    showNotification("Variable types & preprocessing applied", type = "message")
+    rv$selected_data <- df
+    rv$processed_data <- df
+    
+    showNotification(
+      "Variable types applied successfully",
+      type = "message"
+    )
   })
+  
   
   #----------------------
   # Remove missing values
@@ -545,6 +541,70 @@ server <- function(input, output, session) {
       write.csv(rv$data_no_outliers, file, row.names = FALSE)
     }
   )
+  
+  
+  #----------------------
+  # Data standardization
+  #----------------------
+  
+  output$standardize_vars_ui <- renderUI({
+    req(rv$selected_data)
+    
+    numeric_cols <- names(rv$selected_data)[
+      sapply(rv$selected_data, is.numeric)
+    ]
+    
+    selectInput(
+      "standardize_vars",
+      "Select Variables to Standardize",
+      choices = numeric_cols,
+      multiple = TRUE
+    )
+  })
+  
+  # Apply preprocessing
+  observeEvent(input$apply_standardization, {
+    req(rv$selected_data)
+    
+    #df <- rv$selected_data
+    df <- if (!is.null(rv$data_no_outliers)) rv$data_no_outliers else 
+      if (!is.null(rv$cleaned_data)) rv$cleaned_data else rv$selected_data
+    req(df)
+    
+    
+    if (!is.null(input$standardize_vars)) {
+      
+      for (v in input$standardize_vars) {
+        
+        if (input$center_scale_mode == "center_scale") {
+          
+          df[[paste0(v, "_cs")]] <-
+            as.numeric(scale(df[[v]],
+                             center = TRUE,
+                             scale = TRUE))
+          
+        } else if (input$center_scale_mode == "center_only") {
+          
+          df[[paste0(v, "_c")]] <-
+            df[[v]] - mean(df[[v]], na.rm = TRUE)
+          
+        } else if (input$center_scale_mode == "scale_only") {
+          
+          df[[paste0(v, "_s")]] <-
+            df[[v]] / sd(df[[v]], na.rm = TRUE)
+        }
+      }
+    }
+    
+    rv$selected_data <- df
+    rv$processed_data <- df
+    
+    showNotification(
+      "Data standardization applied successfully",
+      type = "message"
+    )
+  })
+  
   
   #----------------------
   # Inputs
