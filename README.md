@@ -5,6 +5,8 @@
 **Link to the Shiny App -**
 https://puneet-talwar.shinyapps.io/FlexibleGLMM/
 
+![description](images/FlexibleGLMM_GUI.png)
+
 **The current version of Flexible GLMM Shiny App can be used to**
 
 - fit Generalized Linear Mixed Model (GLMM) models using afex and glmer R packages
