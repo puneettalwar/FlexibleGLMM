@@ -367,6 +367,7 @@ ________________________________________
 **Citation**
 
 Puneet Talwar, Fermin Balda Aizpurua, Christophe Phillips, Gilles Vandewalle (2026, July 30). FlexibleGLMM: An R Shiny Application for Generalized Linear Mixed Models Across Multiple Statistical Engines: First formal release (Version 1.0.0). Zenodo. 
+
 **Contact**
 
 **Developer:** Puneet Talwar
