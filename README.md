@@ -31,6 +31,25 @@ FlexibleGLMM can be accessed directly without installation through the Shiny web
 **Live Application:**
 
 https://puneet-talwar.shinyapps.io/FlexibleGLMM/
+
+**Installation:**
+
+# Install devtools if not already installed
+install.packages("devtools")
+library(devtools)
+
+# Install FlexibleGLMM package
+devtools::install_github("puneettalwar/FlexibleGLMM")
+
+**Launch the App**
+
+Either with
+
+library(FlexibleGLMM)
+run_app()
+or
+
+FlexibleGLMM::run_app()
 ________________________________________
 **Source Code**
 
@@ -310,6 +329,7 @@ ________________________________________
 -	readr
 -	readxl
 -	dataPreparation
+-	dplyr
 
 **Mixed Model Analysis**
 
@@ -323,22 +343,19 @@ ________________________________________
 
 -	performance
 -	DHARMa
--	influence.ME
 -	effectsize
 -	parameters
 -	r2glmm
--	mctest
--	goft
--	SuppDists
 -	lookout
+-	fitdistrplus
 
 **Reporting and Visualization**
 
 -	ggplot2
--	modelsummary
 -	broom.mixed
 -	knitr
 -	rmarkdown
+-	kableExtra
 
 **Parallel Computing**
 -	future
