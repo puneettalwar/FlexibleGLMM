@@ -34,11 +34,14 @@ https://puneet-talwar.shinyapps.io/FlexibleGLMM/
 
 **Installation:**
 
-Install devtools if not already installed
+- Install devtools if not already installed
+
 install.packages("devtools")
+
 library(devtools)
 
-Install FlexibleGLMM package
+- Install FlexibleGLMM package
+
 devtools::install_github("puneettalwar/FlexibleGLMM")
 
 **Launch the App**
@@ -46,7 +49,9 @@ devtools::install_github("puneettalwar/FlexibleGLMM")
 Either with
 
 library(FlexibleGLMM)
+
 run_app()
+
 or
 
 FlexibleGLMM::run_app()
