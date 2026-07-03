@@ -1,0 +1,79 @@
+---
+title: "GLMM Analysis Report"
+output: html_document
+params:
+  model: NULL
+  anova: NULL
+  formula: ""
+  engine: ""
+  family: ""
+  dharma: NULL
+---
+
+    
+## Methods
+
+Model was fitted using `r params$engine`.
+
+Family: `r params$family`
+
+Formula: `r params$formula`
+
+---
+
+## Results
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+library(knitr)
+library(kableExtra)
+
+model_summary <- summary(params$model)
+```
+
+### Random Effects
+```{r echo=FALSE}
+if (!is.null(model_summary$varcor)) {
+  print(model_summary$varcor)
+}
+```
+
+### Fixed Effects
+```{r results='asis', echo=FALSE}
+coef_df <- as.data.frame(model_summary$coefficients)
+
+# Round numeric columns for readability
+if ("Estimate" %in% names(coef_df))    coef_df$Estimate    <- round(coef_df$Estimate, 3)
+if ("Std. Error" %in% names(coef_df))  coef_df$`Std. Error`<- round(coef_df$`Std. Error`, 3)
+if ("df" %in% names(coef_df))          coef_df$df          <- round(coef_df$df, 0)
+if ("t value" %in% names(coef_df))     coef_df$`t value`   <- round(coef_df$`t value`, 3)
+
+# Format p-values nicely (keeps scientific notation for very small values)
+p_col <- intersect(c("Pr(>|t|)", "Pr(>|z|)"), names(coef_df))
+if (length(p_col) == 1) {
+  coef_df[[p_col]] <- format.pval(coef_df[[p_col]], digits = 3, eps = 0.0001)
+}
+
+# Add significance stars
+sig_stars <- function(p) {
+  p_num <- suppressWarnings(as.numeric(gsub("<", "", p)))
+  cut(p_num, breaks = c(-Inf, 0.001, 0.01, 0.05, 0.1, Inf),
+      labels = c("***", "**", "*", ".", ""))
+}
+if (length(p_col) == 1) {
+  coef_df$" " <- sig_stars(coef_df[[p_col]])
+}
+
+kable(coef_df, caption = "Fixed Effects", row.names = TRUE, align = "r") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"),
+                full_width = FALSE)
+```
+
+```{r echo=FALSE}
+if (!is.null(params$anova)) {
+  print(params$anova)
+}
+```
+```{r echo=FALSE}
+if (!is.null(params$dharma)) {
+  plot(params$dharma)
+}
+```
