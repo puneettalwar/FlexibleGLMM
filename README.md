@@ -1,4 +1,4 @@
-# FlexibleGLMM: A Shiny Application for Flexible Linear/Generalized Mixed Model Analysis
+# FlexibleGLMM: A Shiny Application for Flexible Mixed Model Analysis
 **Overview**
 
 FlexibleGLMM is an open-source R Shiny application designed to provide an interactive graphical user interface (GUI) for performing Generalized Linear Mixed Model (GLMM) analyses without requiring extensive programming knowledge.
