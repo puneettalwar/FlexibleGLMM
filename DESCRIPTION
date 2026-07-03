@@ -1,0 +1,41 @@
+Package: FlexibleGLMM
+Title: Flexible GLMM Toolbox for Fitting Mixed Models
+Version: 0.1.0
+Authors@R: 
+        person("Puneet", "Talwar",
+           email = "talwar.puneet@gmail.com",
+           role = c("aut","cre"))
+Description: FlexibleGLMM is an open-source R Shiny application designed to provide an interactive graphical user interface (GUI) for performing Generalized Linear Mixed Model (GLMM) analyses without requiring extensive programming knowledge. The application integrates multiple established R packages, including afex, lme4, nlme, emmeans, and a broad ecosystem of diagnostic and reporting packages, into a unified workflow.
+License: GPL-3
+Encoding: UTF-8
+Roxygen: list(markdown = TRUE)
+Imports:
+    shiny,
+    shinyjs,
+    DT,
+    ggplot2,
+    lme4,
+    nlme,
+    emmeans,
+    DHARMa,
+    fitdistrplus,
+    afex,
+    readr,
+    readxl,
+    performance,
+    predictmeans,
+    lookout,
+    effectsize,
+    parameters,
+    r2glmm,
+    broom.mixed,
+    rmarkdown,
+    knitr,
+    kableExtra,
+    dplyr,
+    graphics,
+    stats,
+    tools,
+    utils,
+    see
+Config/roxygen2/version: 8.0.0
