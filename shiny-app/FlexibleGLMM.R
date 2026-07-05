@@ -75,11 +75,61 @@ options(shiny.maxRequestSize=30*1024^2) # Maximum upload file size 30 MB
 
 ui <- fluidPage(
   useShinyjs(),
-  titlePanel("Flexible GLMM Toolbox"),
+  
+  # ---- Custom color theme (colors only - no font-size changes) ----
+  tags$head(
+    tags$style(HTML("
+        body {
+          background-color: #f4f7fb;
+        }
+        .title-panel-custom {
+          background: linear-gradient(90deg, #2c3e6b 0%, #3f6fb5 100%);
+          color: #ffffff;
+          padding: 18px 24px;
+          border-radius: 8px;
+          margin-bottom: 18px;
+          box-shadow: 0 2px 6px rgba(0,0,0,0.15);
+        }
+        .well {
+          background-color: #eaf1fb;
+          border: 1px solid #c7d9f0;
+        }
+        .nav-tabs > li > a {
+          color: #2c3e6b;
+          font-weight: 600;
+        }
+        .nav-tabs > li.active > a,
+        .nav-tabs > li.active > a:focus,
+        .nav-tabs > li.active > a:hover {
+          background-color: #3f6fb5 !important;
+          color: #ffffff !important;
+          border-color: #3f6fb5;
+        }
+        hr {
+          border-top: 1px solid #b7c9e2;
+        }
+        .btn, .btn-default {
+          background-color: #3f6fb5;
+          color: #ffffff;
+          border: none;
+        }
+        .btn:hover, .btn-default:hover {
+          background-color: #2c3e6b;
+          color: #ffffff;
+        }
+        h4 {
+          color: #2c3e6b;
+        }
+      "))
+  ),
+  
+  div(class = "title-panel-custom",
+      titlePanel("Flexible GLMM Toolbox")
+  ),
   
   sidebarLayout(
     sidebarPanel(
-      fileInput("data_file","Upload Data Frame (CSV or Excel)", 
+      fileInput("data_file","Upload Data Frame (CSV or Excel)",
                 accept = c(".csv", ".xlsx")),
       p("Select columns to include or exclude from analysis:"),
       uiOutput("select_columns_ui"),
@@ -89,7 +139,7 @@ ui <- fluidPage(
       uiOutput("numeric_vars_ui"),
       actionButton("apply_var_types", "Apply Variable Types"),
       hr(),
-      radioButtons("missing_value", "Missing Value Treatment", 
+      radioButtons("missing_value", "Missing Value Treatment",
                    choices = c("Remove rows with NA" = "NA"),
                    selected = "NA"),
       actionButton("remove_missing", "Remove Missing Values"),
@@ -142,8 +192,8 @@ ui <- fluidPage(
       hr(),
       uiOutput("covariatesInput"),
       
-      selectInput("family", "GLMM Family", 
-                  choices = c("gaussian","gamma","beta","binomial","poisson"), 
+      selectInput("family", "GLMM Family",
+                  choices = c("gaussian","gamma","beta","binomial","poisson"),
                   selected = "gaussian"),
       
       selectInput("linkfun", "Link Function",
@@ -184,18 +234,18 @@ ui <- fluidPage(
     
     mainPanel(
       tabsetPanel(
-        tabPanel("Instructions", 
+        tabPanel("Instructions",
                  
                  div(style="text-align:left; font-size: 16px",br(),
                      br(),
-                     tags$b("The current version of Flexible GLMM toolbox can be used to"),br(),
+                     tags$b(style="color:#2c3e6b;", "The current version of Flexible GLMM toolbox can be used to"),br(),
                      br(),
                      "- fit GLMM models using afex and glmer R packages",br(),
                      "- get results similar to SAS outputs" ,br(),
                      "- identify fit distribution family for the dependent variables" ,br(),
                      "- run analysis for a multiple dependent and independent variables simultaneously",br(),
                      br(),
-                     tags$b("Usage:"),br(),
+                     tags$b(style="color:#3f6fb5;", "Usage:"),br(),
                      br(),
                      "- Data input format: xlsx or csv file with header row containing variable names.",br(),
                      "- By default first sheet will be used as the input. Ex. mtcars, sleepstudy (lme4)",br(),
@@ -203,14 +253,14 @@ ui <- fluidPage(
                      
                      "- For outlier removal specify the standard deviation value (ex. 3)",br(),
                      
-                     "- Multiple covariates can be selected from the input data (age sex bmi)",br(), 
+                     "- Multiple covariates can be selected from the input data (age sex bmi)",br(),
                      
                      "- For family of distributions Refer- https://www.rdocumentation.org/packages/stats/versions/3.6.2/topics/family",br(),
                      
                      "- Custom equation format : y ~ x1 + x2",br(),
                      br(),
                      
-                     tags$b("Note:"),br(),
+                     tags$b(style="color:#b5533f;", "Note:"),br(),
                      br(),
                      "- Afex mixed - Refer to https://cran.r-project.org/web/packages/afex/afex.pdf",br(),
                      
@@ -221,11 +271,12 @@ ui <- fluidPage(
                  ),
                  br(),
                  
-                 # Add image here
+                 # Image now served from inst/app/www via addResourcePath("www", ...)
+                 # in run_app(), so the src is "www/<file>", not a bare filename.
                  tags$div(
                    style = "text-align:left;",
-                   tags$img(src = "GLMM_Table.jpg", 
-                            width = "80%", 
+                   tags$img(src = "www/GLMM_Table.jpg",
+                            width = "80%",
                             style = "border-radius:10px; box-shadow: 2px 2px 10px #ccc;")
                  )
         ),
@@ -243,7 +294,7 @@ ui <- fluidPage(
                  plotOutput("dist_ppcomp"),
                  hr(),
                  verbatimTextOutput("dist_gof")
-        ),        
+        ),
         tabPanel("Model Output", verbatimTextOutput("modelOutput")),
         tabPanel("ANOVA", verbatimTextOutput("anovaOutput")),
         tabPanel(
