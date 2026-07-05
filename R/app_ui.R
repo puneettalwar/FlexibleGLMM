@@ -2,12 +2,66 @@
 # app_ui.R
 # Flexible GLMM Toolbox - UI definition
 #
+# Wrapped in a function (rather than a bare `ui <- fluidPage(...)`
+# object) as is standard for Shiny apps shipped inside a package:
+# it lets run_app() build the UI fresh per session and keeps this
+# file free of top-level side effects, which matters for R CMD check.
 #**************************************************************
 
 app_ui <- function(request) {
   fluidPage(
     useShinyjs(),
-    titlePanel("Flexible GLMM Toolbox"),
+
+    # ---- Custom color theme (colors only - no font-size changes) ----
+    tags$head(
+      tags$style(HTML("
+        body {
+          background-color: #f4f7fb;
+        }
+        .title-panel-custom {
+          background: linear-gradient(90deg, #2c3e6b 0%, #3f6fb5 100%);
+          color: #ffffff;
+          padding: 18px 24px;
+          border-radius: 8px;
+          margin-bottom: 18px;
+          box-shadow: 0 2px 6px rgba(0,0,0,0.15);
+        }
+        .well {
+          background-color: #eaf1fb;
+          border: 1px solid #c7d9f0;
+        }
+        .nav-tabs > li > a {
+          color: #2c3e6b;
+          font-weight: 600;
+        }
+        .nav-tabs > li.active > a,
+        .nav-tabs > li.active > a:focus,
+        .nav-tabs > li.active > a:hover {
+          background-color: #3f6fb5 !important;
+          color: #ffffff !important;
+          border-color: #3f6fb5;
+        }
+        hr {
+          border-top: 1px solid #b7c9e2;
+        }
+        .btn, .btn-default {
+          background-color: #3f6fb5;
+          color: #ffffff;
+          border: none;
+        }
+        .btn:hover, .btn-default:hover {
+          background-color: #2c3e6b;
+          color: #ffffff;
+        }
+        h4 {
+          color: #2c3e6b;
+        }
+      "))
+    ),
+
+    div(class = "title-panel-custom",
+        titlePanel("Flexible GLMM Toolbox")
+    ),
 
     sidebarLayout(
       sidebarPanel(
@@ -120,14 +174,14 @@ app_ui <- function(request) {
 
                    div(style="text-align:left; font-size: 16px",br(),
                        br(),
-                       tags$b("The current version of Flexible GLMM toolbox can be used to"),br(),
+                       tags$b(style="color:#2c3e6b;", "The current version of Flexible GLMM toolbox can be used to"),br(),
                        br(),
                        "- fit GLMM models using afex and glmer R packages",br(),
                        "- get results similar to SAS outputs" ,br(),
                        "- identify fit distribution family for the dependent variables" ,br(),
                        "- run analysis for a multiple dependent and independent variables simultaneously",br(),
                        br(),
-                       tags$b("Usage:"),br(),
+                       tags$b(style="color:#3f6fb5;", "Usage:"),br(),
                        br(),
                        "- Data input format: xlsx or csv file with header row containing variable names.",br(),
                        "- By default first sheet will be used as the input. Ex. mtcars, sleepstudy (lme4)",br(),
@@ -142,7 +196,7 @@ app_ui <- function(request) {
                        "- Custom equation format : y ~ x1 + x2",br(),
                        br(),
 
-                       tags$b("Note:"),br(),
+                       tags$b(style="color:#b5533f;", "Note:"),br(),
                        br(),
                        "- Afex mixed - Refer to https://cran.r-project.org/web/packages/afex/afex.pdf",br(),
 
