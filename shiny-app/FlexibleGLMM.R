@@ -35,34 +35,32 @@
 # Load libraries
 suppressPackageStartupMessages({
   library(shiny)
-  #library(shinylogs) #  does not work on shinyapps.io
+  library(shinyjs)
+  library(DT)
   library(readr)
   library(readxl)
-  library(DT)
-  library(shinyjs)
-  library(afex)
-  library(lme4)
-  library(emmeans)
-  library(SuppDists)
-  library(goft)
-  library(parameters)
-  library(modelsummary)
-  library(mctest)
-  library(dataPreparation)
+  library(dplyr)
   library(ggplot2)
+  library(lme4)
   library(nlme)
-  library(knitr)
-  library(future)
+  library(emmeans)
+  library(DHARMa)
+  library(fitdistrplus)
+  library(afex)
   library(performance)
   library(predictmeans)
-  library(effectsize)
-  library(influence.ME)
-  library(DHARMa)
   library(lookout)
-  library(rmarkdown)
-  library(broom.mixed)
-  library(stats)
+  library(effectsize)
+  library(parameters)
   library(r2glmm)
+  library(broom.mixed)
+  library(rmarkdown)
+  library(knitr)
+  library(kableExtra)
+  library(graphics)
+  library(stats)
+  library(tools)
+  library(utils)
 })
 
 
@@ -275,7 +273,7 @@ ui <- fluidPage(
                  # in run_app(), so the src is "www/<file>", not a bare filename.
                  tags$div(
                    style = "text-align:left;",
-                   tags$img(src = "www/GLMM_Table.jpg",
+                   tags$img(src = "GLMM_Table.jpg",
                             width = "80%",
                             style = "border-radius:10px; box-shadow: 2px 2px 10px #ccc;")
                  )
@@ -1691,16 +1689,26 @@ server <- function(input, output, session) {
             #invisible(NULL)
             
           } else {
-            #performance::check_model(model_obj) #Update packages "patchwork" and "parameters" if there is plot window error
-            #HLMdiag::residplot(model_obj, type = "all")
-            predictmeans::residplot(
-              model_obj,
-              level = 1,
-              id = FALSE,
-              newwd = FALSE,
-              ask = FALSE
-            )
             
+            tryCatch({
+              
+              checks <- performance::check_model(model_obj)
+              plot(checks)
+              
+            }, error = function(e) {
+              
+              message("performance::check_model() failed: ", e$message)
+              message("Falling back to predictmeans::residplot().")
+              
+              predictmeans::residplot(
+                model_obj,
+                level = 1,
+                id = FALSE,
+                newwd = FALSE,
+                ask = FALSE
+              )
+              
+            })
           }
         })
       })
