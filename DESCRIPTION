@@ -1,6 +1,6 @@
 Package: FlexibleGLMM
 Title: Flexible GLMM Toolbox for Fitting Mixed Models
-Version: 0.1.0
+Version: 1.0.0
 Authors@R: 
         person("Puneet", "Talwar",
            email = "talwar.puneet@gmail.com",
