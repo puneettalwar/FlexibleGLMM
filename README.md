@@ -387,7 +387,7 @@ Planned enhancements include:
 ________________________________________
 **Citation**
 
-Puneet Talwar, Fermin Balda Aizpurua, Christophe Phillips, Gilles Vandewalle (2026, July 30). FlexibleGLMM: An R Shiny Application for Generalized Linear Mixed Models Across Multiple Statistical Engines: First formal release (Version 1.0.0). Zenodo. 
+Puneet Talwar, Fermin Balda Aizpurua, Christophe Phillips, Gilles Vandewalle (2026, July 30). FlexibleGLMM: An R Shiny Application for Generalized Linear Mixed Models Across Multiple Statistical Engines: First formal release (Version 1.1.0). Zenodo. DOI: 10.5281/zenodo.21410757
 
 **Contact**
 
