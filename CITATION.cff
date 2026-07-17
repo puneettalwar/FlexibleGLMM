@@ -1,0 +1,24 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+authors:
+- name: Puneet Talwar
+  orcid: 0000-0001-7631-7926
+  corresponding: yes
+  affiliation: 1
+- name: Fermin Balda Aizpurua
+  orcid: 0000-0002-0943-8928
+  affiliation: 1
+- name: Christophe Phillips
+  orcid: 0000-0002-4990-425X
+  affiliation: 1
+- name: Gilles Vandewalle
+  orcid: 0000-0003-2483-2752
+  affiliation: 1
+affiliations:
+- name: "GIGA-Institute, CRC-Human Imaging, University of Liège, Liège, Belgium"
+  index: 1
+title: "FlexibleGLMM"
+version: 1.1.0
+doi: 10.5281/zenodo.1234
+date-released: 2026-07-17
+url: "https://github.com/puneettalwar/FlexibleGLMM"
