@@ -122,7 +122,11 @@ ui <- fluidPage(
   ),
   
   div(class = "title-panel-custom",
-      titlePanel("Flexible GLMM Toolbox")
+      titlePanel("FlexibleGLMM"),
+      tags$img(src = "FlexibleGLMM_logo.png", 
+               height = "80px",
+               #width = "50%",
+               style="position:fixed;right:30px;top:10px;")
   ),
   
   sidebarLayout(
@@ -158,6 +162,7 @@ ui <- fluidPage(
       numericInput("mahal_cutoff", "Mahalanobis cutoff (Chi-square quantile, e.g. 0.99)", value = 0.99, min = 0.5, max = 0.999),
       actionButton("remove_outliers", "Remove Outliers"),
       verbatimTextOutput("dimAfterOutlierRemoval"),
+      hr(),
       downloadButton("download_no_outliers", "Download Cleaned CSV"),
       hr(),
       uiOutput("standardize_vars_ui"),
@@ -659,11 +664,35 @@ server <- function(input, output, session) {
   # Inputs
   #----------------------
   
+  current_data <- reactive({
+    
+    if (!is.null(rv$processed_data))
+      return(rv$processed_data)
+    
+    if (!is.null(rv$data_no_outliers))
+      return(rv$data_no_outliers)
+    
+    if (!is.null(rv$cleaned_data))
+      return(rv$cleaned_data)
+    
+    if (!is.null(rv$selected_data))
+      return(rv$selected_data)
+    
+    rv$data
+  })
+  
+  
   observe({
     req(rv$selected_data)
-    df <- if (!is.null(rv$data_no_outliers)) rv$data_no_outliers else 
-      if (!is.null(rv$cleaned_data)) rv$cleaned_data else rv$selected_data
-    
+    # df <- if (!is.null(rv$processed_data))  
+    #   rv$processed_data
+    # else if (!is.null(rv$data_no_outliers))
+    #   rv$data_no_outliers
+    # else if (!is.null(rv$cleaned_data))
+    #   rv$cleaned_data
+    # else
+    #   rv$selected_data
+    df <- current_data()
     output$yInput <- renderUI({
       selectInput("y", "Dependent Variable (y)", choices = names(df))
     })
@@ -803,9 +832,9 @@ server <- function(input, output, session) {
   runModels <- eventReactive(input$run, {
     #req(rv$selected_data, input$y, input$x, input$random_effects)
     req(rv$selected_data, input$y)
-    df <- if (!is.null(rv$data_no_outliers)) rv$data_no_outliers else 
-      if (!is.null(rv$cleaned_data)) rv$cleaned_data else rv$selected_data
-    
+    df <- current_data()
+    # df <- if (!is.null(rv$data_no_outliers)) rv$data_no_outliers else 
+    #   if (!is.null(rv$cleaned_data)) rv$cleaned_data else rv$selected_data
     
     # Family + link function builder
     get_family <- function(fam, linkfun) {
@@ -1761,7 +1790,8 @@ server <- function(input, output, session) {
     results <- runModels()
     req(results)
     
-    df <- if (is.null(rv$cleaned_data)) rv$selected_data else rv$cleaned_data
+    #df <- if (is.null(rv$cleaned_data)) rv$selected_data else rv$cleaned_data
+    df <- current_data()
     df_num <- df[sapply(df, is.numeric)]
     
     lapply(names(results), function(nm) {
@@ -1913,12 +1943,13 @@ server <- function(input, output, session) {
   
   observeEvent(input$fit_distribution, {
     
-    df <- isolate(
-      if (is.null(rv$data_no_outliers))
-        if (is.null(rv$cleaned_data)) rv$selected_data else rv$cleaned_data
-      else rv$data_no_outliers
-    )
+    # df <- isolate(
+    #   if (is.null(rv$data_no_outliers))
+    #     if (is.null(rv$cleaned_data)) rv$selected_data else rv$cleaned_data
+    #   else rv$data_no_outliers
+    # )
     
+    df <- current_data()
     varname <- input$y
     z <- df[[varname]]
     
