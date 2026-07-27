@@ -19,8 +19,8 @@ affiliations:
   index: 1
 title: "FlexibleGLMM: A R Shiny Application for Comprehensive Generalized Linear Mixed Model Analysis, Diagnostics, and Visualization"
 version: 1.1.0
-doi: https://doi.org/10.5281/zenodo.21410757
 date-released: 2026-07-17
-url: "https://github.com/puneettalwar/FlexibleGLMM"
-Web application: "https://puneet-talwar.shinyapps.io/FlexibleGLMM/"
-GitHub repository: "https://github.com/puneettalwar/FlexibleGLMM/"
+license: GPL-3.0
+doi: 10.5281/zenodo.21410757
+url: "https://puneet-talwar.shinyapps.io/FlexibleGLMM"
+repository-code: "https://github.com/puneettalwar/FlexibleGLMM"
