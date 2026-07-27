@@ -60,7 +60,11 @@ app_ui <- function(request) {
     ),
 
     div(class = "title-panel-custom",
-        titlePanel("Flexible GLMM Toolbox")
+        titlePanel("FlexibleGLMM"),
+        tags$img(src = "www/FlexibleGLMM_logo.png",
+                 height = "80px",
+                 #width = "50%",
+                 style="position:fixed;right:30px;top:10px;")
     ),
 
     sidebarLayout(
