@@ -201,7 +201,18 @@ diagnostics_server <- function(input, output, session, rv, runModels) {
     results <- runModels()
     req(results)
 
-    df <- if (is.null(rv$cleaned_data)) rv$selected_data else rv$cleaned_data
+    #df <- if (is.null(rv$cleaned_data)) rv$selected_data else rv$cleaned_data
+
+    df <- if (!is.null(rv$processed_data))
+      rv$processed_data
+    else if (!is.null(rv$data_no_outliers))
+      rv$data_no_outliers
+    else if (!is.null(rv$cleaned_data))
+      rv$cleaned_data
+    else
+      rv$selected_data
+
+
     df_num <- df[sapply(df, is.numeric)]
 
     lapply(names(results), function(nm) {

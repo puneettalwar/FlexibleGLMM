@@ -15,11 +15,20 @@ distributions_server <- function(input, output, session, rv) {
 
   observeEvent(input$fit_distribution, {
 
-    df <- isolate(
-      if (is.null(rv$data_no_outliers))
-        if (is.null(rv$cleaned_data)) rv$selected_data else rv$cleaned_data
-      else rv$data_no_outliers
-    )
+    # df <- isolate(
+    #   if (is.null(rv$data_no_outliers))
+    #     if (is.null(rv$cleaned_data)) rv$selected_data else rv$cleaned_data
+    #   else rv$data_no_outliers
+    # )
+
+    df <- if (!is.null(rv$processed_data))
+      rv$processed_data
+    else if (!is.null(rv$data_no_outliers))
+      rv$data_no_outliers
+    else if (!is.null(rv$cleaned_data))
+      rv$cleaned_data
+    else
+      rv$selected_data
 
     varname <- input$y
     z <- df[[varname]]
@@ -77,8 +86,18 @@ distributions_server <- function(input, output, session, rv) {
     req(rv$dist_fits, input$y)
 
     # Get currently selected y from the same data source
-    df <- if (!is.null(rv$data_no_outliers)) rv$data_no_outliers else
-      if (!is.null(rv$cleaned_data)) rv$cleaned_data else rv$selected_data
+    # df <- if (!is.null(rv$data_no_outliers)) rv$data_no_outliers else
+    #   if (!is.null(rv$cleaned_data)) rv$cleaned_data else rv$selected_data
+
+    df <- if (!is.null(rv$processed_data))
+      rv$processed_data
+    else if (!is.null(rv$data_no_outliers))
+      rv$data_no_outliers
+    else if (!is.null(rv$cleaned_data))
+      rv$cleaned_data
+    else
+      rv$selected_data
+
 
     z <- suppressWarnings(as.numeric(df[[input$y]]))
     z <- na.exclude(z)

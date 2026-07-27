@@ -15,8 +15,18 @@ model_fit_server <- function(input, output, session, rv) {
   runModels <- eventReactive(input$run, {
     #req(rv$selected_data, input$y, input$x, input$random_effects)
     req(rv$selected_data, input$y)
-    df <- if (!is.null(rv$data_no_outliers)) rv$data_no_outliers else
-      if (!is.null(rv$cleaned_data)) rv$cleaned_data else rv$selected_data
+
+    # df <- if (!is.null(rv$data_no_outliers)) rv$data_no_outliers else
+    #   if (!is.null(rv$cleaned_data)) rv$cleaned_data else rv$selected_data
+
+    df <- if (!is.null(rv$processed_data))
+      rv$processed_data
+    else if (!is.null(rv$data_no_outliers))
+      rv$data_no_outliers
+    else if (!is.null(rv$cleaned_data))
+      rv$cleaned_data
+    else
+      rv$selected_data
 
     family <- get_family(input$family, input$linkfun)
 
