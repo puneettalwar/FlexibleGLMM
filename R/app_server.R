@@ -16,7 +16,7 @@ app_server <- function(input, output, session) {
   # Shared reactive state used across every module
   rv <- reactiveValues(
     data = NULL, selected_data = NULL,
-    cleaned_data = NULL, data_no_outliers = NULL,
+    cleaned_data = NULL, data_no_outliers = NULL, processed_data = NULL,
     models = NULL
   )
 
