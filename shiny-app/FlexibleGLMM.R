@@ -341,7 +341,7 @@ server <- function(input, output, session) {
   rv <- reactiveValues(
     data = NULL, selected_data = NULL, 
     cleaned_data = NULL, data_no_outliers = NULL,
-    models = NULL
+    processed_data = NULL, models = NULL
   )
   
   #----------------------
@@ -2002,8 +2002,15 @@ server <- function(input, output, session) {
     
   })
   
+  
+  # ------------------------------------------------------------------
+  # Plots with raw selected data
+  # ------------------------------------------------------------------
+  
+  
   output$boxplot_var_selector <- renderUI({
-    df <- rv$selected_data
+    #df <- rv$selected_data
+    df <- current_data()
     req(df)
     selectInput("boxplot_cats", "Select Categorical IV:",
                 choices = names(df)[sapply(df, is.factor)])
@@ -2011,7 +2018,8 @@ server <- function(input, output, session) {
   
   output$boxplot_output <- renderPlot({
     req(input$y, input$boxplot_cats)
-    df <- rv$selected_data
+    #df <- rv$selected_data
+    df <- current_data()
     ggplot(df, aes_string(x = input$boxplot_cats, y = input$y)) +
       geom_boxplot(fill = "lightblue") +
       theme_bw() +
@@ -2020,12 +2028,14 @@ server <- function(input, output, session) {
   
   output$t_test_output <- renderPrint({
     req(input$y, input$boxplot_cats)
-    df <- rv$selected_data
+    #df <- rv$selected_data
+    df <- current_data()
     pairwise.t.test(df[[input$y]], df[[input$boxplot_cats]], p.adjust.method = "none")
   })
   
   output$corr_iv_selector <- renderUI({
-    df <- rv$selected_data
+    #df <- rv$selected_data
+    df <- current_data()
     req(df)
     selectInput("corr_iv", "Select Numeric IV:",
                 choices = names(df)[sapply(df, is.numeric)])
@@ -2033,7 +2043,8 @@ server <- function(input, output, session) {
   
   corr_plot_reactive <- reactive({
     req(input$y, input$corr_iv)
-    df <- rv$selected_data
+    #df <- rv$selected_data
+    df <- current_data()
     ggplot(df, aes_string(x = input$corr_iv, y = input$y)) + 
       geom_point() +
       geom_smooth(method = "lm", se = TRUE) +
@@ -2044,8 +2055,8 @@ server <- function(input, output, session) {
   
   output$corr_stats <- renderPrint({
     req(input$y, input$corr_iv)
-    df <- rv$selected_data
-    
+    #df <- rv$selected_data
+    df <- current_data()
     sp <- cor.test(df[[input$corr_iv]], df[[input$y]], method = "spearman")
     
     reg <- summary(lm(df[[input$y]] ~ df[[input$corr_iv]]))
@@ -2070,8 +2081,9 @@ server <- function(input, output, session) {
     req(rv$dist_fits, input$y)
     
     # Get currently selected y from the same data source
-    df <- if (!is.null(rv$data_no_outliers)) rv$data_no_outliers else 
-      if (!is.null(rv$cleaned_data)) rv$cleaned_data else rv$selected_data
+    # df <- if (!is.null(rv$data_no_outliers)) rv$data_no_outliers else 
+    #   if (!is.null(rv$cleaned_data)) rv$cleaned_data else rv$selected_data
+    df <- current_data()
     
     z <- suppressWarnings(as.numeric(df[[input$y]]))
     z <- na.exclude(z)
