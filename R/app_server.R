@@ -41,5 +41,5 @@ app_server <- function(input, output, session) {
   emmeans_server(input, output, session, rv, runModels)
 
   # Boxplots, t-tests, correlation plots
-  plotting_server(input, output, session, rv)
+  plotting_server(input, output, session)
 }
