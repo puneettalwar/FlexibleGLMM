@@ -25,7 +25,7 @@ current_data <- reactive({
 })
 
 
-plotting_server <- function(input, output, session, rv) {
+plotting_server <- function(input, output, session) {
 
   output$boxplot_var_selector <- renderUI({
     #df <- rv$selected_data
