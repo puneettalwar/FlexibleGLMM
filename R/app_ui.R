@@ -221,10 +221,10 @@ app_ui <- function(request) {
                    )
           ),
           tabPanel("Data", DTOutput("dataTable")),
-          tabPanel("FitDist Output",
+          tabPanel("FitDist Output (Exploratory)",
                    verbatimTextOutput("fitDistLogs") # Logs displayed here
           ),
-          tabPanel("Fit Distribution Plots",
+          tabPanel("Fit Distribution Plots (Exploratory)",
                    h4("Distribution Fitting for Selected Dependent Variable"),
                    plotOutput("dist_descriptive"),
                    hr(),
@@ -246,7 +246,7 @@ app_ui <- function(request) {
             uiOutput("performance_ui")
           ),
           tabPanel("Post-hoc (EMMs)", verbatimTextOutput("emmeansOutput")),
-          tabPanel("Summary Plots",
+          tabPanel("Summary Plots (Exploratory)",
                    h4("Boxplots with Pairwise t-tests"),
                    uiOutput("boxplot_var_selector"),
                    plotOutput("boxplot_output"),

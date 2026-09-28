@@ -45,5 +45,6 @@
 #' @importFrom stats as.formula lm cooks.distance mahalanobis qchisq cor.test pairwise.t.test na.omit na.exclude sd cov quantile ave gaussian Gamma binomial poisson anova AIC BIC logLik nobs complete.cases family model.frame
 #' @importFrom graphics abline plot.new points text
 #' @importFrom utils capture.output combn write.csv
+#' @importFrom dplyr %>%
 ## usethis namespace: end
 NULL

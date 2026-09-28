@@ -151,7 +151,7 @@ extract_table <- function(model) {
 }
 
 format_table <- function(df) {
-  df |>
+  df %>%
     dplyr::mutate(
       dplyr::across(where(is.numeric), ~ round(.x, 4))
     )
@@ -186,8 +186,21 @@ model_summary_server <- function(input, output, session, rv, runModels) {
         cat("Correlation:", res$correlation, "\n")
       }
       if (!is.null(res$model)) {
+        n_info <- get_n_subjects_obs(res$model)
+        cat("\n--- Sample size used in this fit ---\n")
+        cat("N subjects:", n_info$n_subjects, " | N observations:", n_info$n_observations, "\n")
+
+        if (!is.null(res$warnings) && length(res$warnings) > 0) {
+          cat("\n--- Warnings raised during model fitting ---\n")
+          for (w in res$warnings) cat(" - ", w, "\n", sep = "")
+        } else {
+          cat("\n--- Warnings raised during model fitting: none ---\n")
+        }
+
         print(summary(res$model))
         cat("\n=== Effect Sizes ===\n")
+        cat("(partial eta-squared via effectsize::eta_squared() on the ANOVA table;\n",
+            " a classical ANOVA-based measure - interpret cautiously for GLMMs)\n", sep = "")
 
         es <- extract_effect_sizes(res$model)
 
@@ -196,7 +209,7 @@ model_summary_server <- function(input, output, session, rv, runModels) {
 
           r2 <- attr(es, "R2")
           if (!is.null(r2)) {
-            cat("\n--- R-squared ---\n")
+            cat("\n--- R-squared (marginal/conditional, via performance::r2()) ---\n")
             print(r2)
           }
         } else {
@@ -220,6 +233,7 @@ model_summary_server <- function(input, output, session, rv, runModels) {
       }
     }
   })
+
 
   #----------------------
   # ANOVA output
@@ -284,7 +298,7 @@ model_summary_server <- function(input, output, session, rv, runModels) {
               format  = "html",
               caption = paste("Model results:", name),
               align   = "l"
-            ) |>
+            ) %>%
               kableExtra::kable_styling(
                 bootstrap_options = c("striped", "hover", "condensed"),
                 full_width = TRUE,
@@ -338,6 +352,8 @@ model_summary_server <- function(input, output, session, rv, runModels) {
         dharma_obj <- simulateResiduals(model_obj)
       }
 
+      n_info <- get_n_subjects_obs(res$model)
+
       rmarkdown::render(
         system.file("app", "report_template.Rmd", package = "FlexibleGLMM"),
         output_file = file,
@@ -347,10 +363,17 @@ model_summary_server <- function(input, output, session, rv, runModels) {
           formula = res$formula,
           engine = res$engine,
           family = input$family,
-          dharma = dharma_obj
+          dharma = dharma_obj,
+          singular_fit = check_singularity_flag(model_obj),
+          convergence = check_convergence_flag(model_obj),
+          n_subjects = n_info$n_subjects,
+          n_observations = n_info$n_observations,
+          fit_warnings = res$warnings,
+          session_info = utils::capture.output(utils::sessionInfo())
         ),
         envir = new.env(parent = globalenv())
       )
     }
   )
 }
+

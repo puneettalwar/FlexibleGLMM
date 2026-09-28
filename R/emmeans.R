@@ -24,6 +24,11 @@ emmeans_server <- function(input, output, session, rv, runModels) {
 
       if (is.list(res) && length(ph_vars) > 0) {
 
+        cat("(Intervals below are confidence intervals for the estimated mean,\n",
+            " not prediction intervals. Unadjusted pairwise contrasts are shown\n",
+            " first, followed by Tukey-adjusted contrasts within the family of\n",
+            " pairwise comparisons for each selected factor.)\n", sep = "")
+
         ## --- Main effects + pairwise contrasts ---
         for (fac in ph_vars) {
           cat("\nFactor:", fac, "\n")

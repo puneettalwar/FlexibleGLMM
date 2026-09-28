@@ -49,9 +49,14 @@ model_fit_server <- function(input, output, session, rv) {
       f <- as.formula(f_str)
 
       tryCatch({
+        fit_warnings <- character()
+
         if (input$engine == "afex::mixed") {
           if (input$family == "gaussian") {
-            model <- mixed(f, data = df, method = "KR")
+            fit <- fit_with_diagnostics(mixed(f, data = df, method = "KR"))
+            if (inherits(fit$result, "FlexibleGLMM_fit_error")) stop(fit$result$error)
+            model <- fit$result
+            fit_warnings <- fit$warnings
             anova_tab <- anova(model, ddf = "Kenward-Roger", type = 3)
           }
         } else if (input$engine == "lme4::glmer") {
@@ -61,7 +66,10 @@ model_fit_server <- function(input, output, session, rv) {
             "binomial" = binomial(),
             "poisson"  = poisson()
           )
-          model <- mixed(f, data = df, family = base_family, method = "LRT")
+          fit <- fit_with_diagnostics(mixed(f, data = df, family = base_family, method = "LRT"))
+          if (inherits(fit$result, "FlexibleGLMM_fit_error")) stop(fit$result$error)
+          model <- fit$result
+          fit_warnings <- fit$warnings
           anova_tab <- anova(model)
         }else if(input$engine == "nlme::lme") {
           if (input$family != "gaussian")
@@ -125,18 +133,22 @@ model_fit_server <- function(input, output, session, rv) {
           #fixed_str <- gsub("\\+\\s*1$", "", strip_lme4_random(f_str))
 
 
-          model <- nlme::lme(
+          fit <- fit_with_diagnostics(nlme::lme(
             fixed = as.formula(fixed_str),
             random = random_formula,
             correlation = correlation,
             data = df,
             method = "REML"
-          )
+          ))
+          if (inherits(fit$result, "FlexibleGLMM_fit_error")) stop(fit$result$error)
+          model <- fit$result
+          fit_warnings <- fit$warnings
 
           anova_tab <- anova(model)
         }
 
-        results[[custom_eq]] <- list(engine  = input$engine,formula = f_str, model = model, anova = anova_tab)
+        check_gamma_identity_positivity(model, input$family, input$linkfun)
+        results[[custom_eq]] <- list(engine = input$engine, formula = f_str, model = model, anova = anova_tab, warnings = fit_warnings)
       }, error = function(e) {
         results[[custom_eq]] <- list(formula = f_str, error = e$message)
       })
@@ -172,6 +184,8 @@ model_fit_server <- function(input, output, session, rv) {
         f <- as.formula(f_str)
 
         tryCatch({
+          fit_warnings <- character()
+
           if (input$engine == "afex::mixed") {
 
             # AFEX rule:
@@ -181,7 +195,10 @@ model_fit_server <- function(input, output, session, rv) {
             fam_name <- input$family
 
             if (fam_name == "gaussian") {
-              model <- mixed(f, data = df, method = "KR")
+              fit <- fit_with_diagnostics(mixed(f, data = df, method = "KR"))
+              if (inherits(fit$result, "FlexibleGLMM_fit_error")) stop(fit$result$error)
+              model <- fit$result
+              fit_warnings <- fit$warnings
               anova_tab <- anova(model, ddf = "Kenward-Roger", type = 3)
             } else {
               # Remove link (AFEX does NOT support custom links)
@@ -191,14 +208,20 @@ model_fit_server <- function(input, output, session, rv) {
                 "binomial" = binomial(),
                 "poisson" = poisson()
               )
-              model <- mixed(f, data = df, family = base_family, method = "LRT")
+              fit <- fit_with_diagnostics(mixed(f, data = df, family = base_family, method = "LRT"))
+              if (inherits(fit$result, "FlexibleGLMM_fit_error")) stop(fit$result$error)
+              model <- fit$result
+              fit_warnings <- fit$warnings
               anova_tab <- anova(model)
             }
           }
           else if (input$engine == "lme4::glmer") {
-            model <- glmer(f, data = df, family = family,
-                           control = glmerControl(optimizer = "bobyqa",
-                                                  optCtrl = list(maxfun = 2e5)))
+            fit <- fit_with_diagnostics(glmer(f, data = df, family = family,
+                                              control = glmerControl(optimizer = "bobyqa",
+                                                                     optCtrl = list(maxfun = 2e5))))
+            if (inherits(fit$result, "FlexibleGLMM_fit_error")) stop(fit$result$error)
+            model <- fit$result
+            fit_warnings <- fit$warnings
             anova_tab <- anova(model)
           } else if (input$engine == "nlme::lme") {
 
@@ -262,18 +285,22 @@ model_fit_server <- function(input, output, session, rv) {
             fixed_str <- strip_lme4_random(f_str)
             #fixed_str <- gsub("\\+\\s*1$", "", strip_lme4_random(f_str))
 
-            model <- nlme::lme(
+            fit <- fit_with_diagnostics(nlme::lme(
               fixed = as.formula(fixed_str),
               random = random_formula,
               correlation = correlation,
               data = df,
               method = "REML"
-            )
+            ))
+            if (inherits(fit$result, "FlexibleGLMM_fit_error")) stop(fit$result$error)
+            model <- fit$result
+            fit_warnings <- fit$warnings
 
             anova_tab <- anova(model)
           }
 
-          results[[iv]] <- list(engine  = input$engine,formula = f_str, model = model, anova = anova_tab)
+          check_gamma_identity_positivity(model, input$family, input$linkfun)
+          results[[iv]] <- list(engine = input$engine, formula = f_str, model = model, anova = anova_tab, warnings = fit_warnings)
 
         }, error = function(e) {
           results[[iv]] <- list(formula = f_str, error = e$message)
