@@ -8,36 +8,115 @@ params:
   engine: ""
   family: ""
   dharma: NULL
+  singular_fit: NULL
+  convergence: NULL
+  n_subjects: NULL
+  n_observations: NULL
+  fit_warnings: NULL
+  session_info: NULL
 ---
 
-    
+```{r setup, echo=FALSE, message=FALSE, warning=FALSE}
+library(knitr)
+library(kableExtra)
+```
+
 ## Methods
 
-Model was fitted using `r params$engine`.
+Model was fitted using **`r params$engine`**.
 
-Family: `r params$family`
+Family: **`r params$family`**
 
-Formula: `r params$formula`
+Formula: **`r params$formula`**
+
+```{r sample-size, echo=FALSE, results='asis'}
+if (!is.null(params$n_subjects) || !is.null(params$n_observations)) {
+  cat(
+    "Sample size used in this fit: **",
+    ifelse(is.null(params$n_subjects) || is.na(params$n_subjects), "NA", params$n_subjects),
+    " subjects**, **",
+    ifelse(is.null(params$n_observations) || is.na(params$n_observations), "NA", params$n_observations),
+    " observations**.\n",
+    sep = ""
+  )
+}
+```
+
+---
+
+## Model Fitting Diagnostics
+
+This section reports diagnostics captured automatically at fit time and should be
+reviewed before interpreting the results below. A singular fit, a non-convergence
+message, or fitting warnings do not necessarily invalidate a model, but they do mean
+its estimates (particularly variance components) should be interpreted with caution.
+
+```{r diagnostics-table, echo=FALSE, results='asis'}
+diag_rows <- list()
+
+if (!is.null(params$singular_fit)) {
+  diag_rows[["Singular fit"]] <- if (isTRUE(params$singular_fit)) {
+    "YES \u26a0\ufe0f"
+  } else if (identical(params$singular_fit, FALSE)) {
+    "NO"
+  } else {
+    "N/A (not applicable to this engine, e.g. nlme)"
+  }
+}
+
+if (!is.null(params$convergence)) {
+  diag_rows[["Convergence"]] <- params$convergence
+}
+
+if (length(diag_rows) > 0) {
+  diag_df <- data.frame(
+    Check = names(diag_rows),
+    Result = unlist(diag_rows, use.names = FALSE),
+    stringsAsFactors = FALSE
+  )
+  print(
+    kable(diag_df, row.names = FALSE, align = "l") %>%
+      kable_styling(bootstrap_options = c("striped", "hover", "condensed"),
+                    full_width = FALSE)
+  )
+} else {
+  cat("_No singularity/convergence information was supplied for this model._\n")
+}
+```
+
+### Warnings raised during model fitting
+
+```{r fit-warnings, echo=FALSE, results='asis'}
+if (!is.null(params$fit_warnings) && length(params$fit_warnings) > 0) {
+  cat("<ul>\n")
+  for (w in params$fit_warnings) {
+    cat("<li>", htmltools::htmlEscape(w), "</li>\n", sep = "")
+  }
+  cat("</ul>\n")
+} else {
+  cat("_No warnings were raised while fitting this model._\n")
+}
+```
 
 ---
 
 ## Results
-```{r echo=FALSE, message=FALSE, warning=FALSE}
-library(knitr)
-library(kableExtra)
 
+```{r model-summary, echo=FALSE, message=FALSE, warning=FALSE}
 model_summary <- summary(params$model)
 ```
 
 ### Random Effects
-```{r echo=FALSE}
+```{r random-effects, echo=FALSE}
 if (!is.null(model_summary$varcor)) {
   print(model_summary$varcor)
+} else {
+  cat("Random-effects variance-covariance summary not available for this model.\n")
 }
 ```
 
 ### Fixed Effects
-```{r results='asis', echo=FALSE}
+```{r fixed-effects, results='asis', echo=FALSE}
 coef_df <- as.data.frame(model_summary$coefficients)
 
 # Round numeric columns for readability
@@ -67,13 +146,35 @@ kable(coef_df, caption = "Fixed Effects", row.names = TRUE, align = "r") %>%
                 full_width = FALSE)
 ```
 
-```{r echo=FALSE}
+### ANOVA (Type III)
+```{r anova, echo=FALSE}
 if (!is.null(params$anova)) {
   print(params$anova)
+} else {
+  cat("ANOVA table not available for this model.\n")
 }
 ```
-```{r echo=FALSE}
+
+### DHARMa Residual Diagnostics
+```{r dharma, echo=FALSE, fig.width=8, fig.height=5}
 if (!is.null(params$dharma)) {
   plot(params$dharma)
+} else {
+  cat("DHARMa residual diagnostics are only computed for lme4-based (glmerMod/lmerMod) models.\n")
 }
 ```
+
+---
+
+## Reproducibility Information
+
+<details>
+<summary>R and package versions used to produce this report (click to expand)</summary>
+```{r session-info, echo=FALSE}
+if (!is.null(params$session_info)) {
+  cat(paste(params$session_info, collapse = "\n"))
+} else {
+  cat("Session information was not supplied for this report.")
+}
+```
+</details>
