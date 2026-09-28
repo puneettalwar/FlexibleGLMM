@@ -176,7 +176,7 @@ ui <- fluidPage(
       actionButton("apply_standardization", "Apply data standardization"),
       actionButton("open_data_view", "View Processed Data"),
       hr(),
-      p("Multiple y and x inputs are allowed"),
+      p("Multiple responses run as separate univariate mixed models."),
       uiOutput("yInput"),
       hr(),
       p("For fit distribution check dependent variable must be a numeric"),
@@ -195,8 +195,8 @@ ui <- fluidPage(
       hr(),
       uiOutput("covariatesInput"),
       
-      selectInput("family", "GLMM Family",
-                  choices = c("gaussian","gamma","beta","binomial","poisson"),
+      selectInput("family", "Response family",
+                  choices = c("gaussian","gamma","binomial","poisson"),
                   selected = "gaussian"),
       
       selectInput("linkfun", "Link Function",
@@ -287,10 +287,10 @@ ui <- fluidPage(
                  p("Puneet Talwar, Fermin Balda Aizpurua, Christophe Phillips, & Gilles Vandewalle. (2026). FlexibleGLMM: A R Shiny Application for Comprehensive Generalized Linear Mixed Model Analysis, Diagnostics, and Visualization (Version 1.1.0) [Computer software]. https://doi.org/https://doi.org/10.5281/zenodo.21410757")
         ),
         tabPanel("Data", DTOutput("dataTable")),
-        tabPanel("FitDist Output",
+        tabPanel("FitDist Output (Exploratory)",
                  verbatimTextOutput("fitDistLogs") # Logs displayed here
         ),
-        tabPanel("Fit Distribution Plots",
+        tabPanel("Fit Distribution Plots (Exploratory)",
                  h4("Distribution Fitting for Selected Dependent Variable"),
                  plotOutput("dist_descriptive"),
                  hr(),
@@ -312,7 +312,7 @@ ui <- fluidPage(
           uiOutput("performance_ui")
         ),
         tabPanel("Post-hoc (EMMs)", verbatimTextOutput("emmeansOutput")),
-        tabPanel("Summary Plots",
+        tabPanel("Summary Plots (Exploratory)",
                  h4("Boxplots with Pairwise t-tests"),
                  uiOutput("boxplot_var_selector"),
                  plotOutput("boxplot_output"),
@@ -462,7 +462,7 @@ server <- function(input, output, session) {
   #     })
   #   }
   # })
- 
+  
   #----------------------
   # Outlier removal
   #----------------------
@@ -588,7 +588,7 @@ server <- function(input, output, session) {
     })
   })
   
-
+  
   output$download_no_outliers <- downloadHandler(
     filename = function() {
       paste0("cleaned_no_outliers_", Sys.Date(), ".csv")
@@ -864,6 +864,29 @@ server <- function(input, output, session) {
     
     family <- get_family(input$family, input$linkfun)
     
+    # Positivity check for Gamma models with an identity link
+    check_gamma_identity_positivity <- function(model, family_name, link_name) {
+      if (!identical(family_name, "gamma") || !identical(link_name, "identity")) {
+        return(invisible(NULL))
+      }
+      fitted_vals <- tryCatch(stats::fitted(model), error = function(e) NULL)
+      if (is.null(fitted_vals)) return(invisible(NULL))
+      if (any(fitted_vals <= 0, na.rm = TRUE)) {
+        showNotification(
+          paste0(
+            "Warning: this Gamma (identity link) model has ",
+            sum(fitted_vals <= 0, na.rm = TRUE),
+            " non-positive fitted value(s). A Gamma mean must be > 0; ",
+            "reconsider the link function or model specification before ",
+            "interpreting this fit."
+          ),
+          type = "warning", duration = 10
+        )
+      }
+      invisible(NULL)
+    }
+    
+    
     custom_eq <- trimws(input$custom_eq)
     #mode <- input$interaction_mode
     
@@ -883,11 +906,16 @@ server <- function(input, output, session) {
       f <- as.formula(f_str)
       
       tryCatch({
+        fit_warnings <- character()
+        
         if (input$engine == "afex::mixed") {
           if (input$family == "gaussian") {
-            model <- mixed(f, data = df, method = "KR")
+            fit <- fit_with_diagnostics(mixed(f, data = df, method = "KR"))
+            if (inherits(fit$result, "FlexibleGLMM_fit_error")) stop(fit$result$error)
+            model <- fit$result
+            fit_warnings <- fit$warnings
             anova_tab <- anova(model, ddf = "Kenward-Roger", type = 3)
-          }        
+          }
         } else if (input$engine == "lme4::glmer") {
           base_family <- switch(
             input$family,
@@ -895,7 +923,10 @@ server <- function(input, output, session) {
             "binomial" = binomial(),
             "poisson"  = poisson()
           )
-          model <- mixed(f, data = df, family = base_family, method = "LRT")
+          fit <- fit_with_diagnostics(mixed(f, data = df, family = base_family, method = "LRT"))
+          if (inherits(fit$result, "FlexibleGLMM_fit_error")) stop(fit$result$error)
+          model <- fit$result
+          fit_warnings <- fit$warnings
           anova_tab <- anova(model)
         }else if(input$engine == "nlme::lme") {
           if (input$family != "gaussian")
@@ -959,18 +990,22 @@ server <- function(input, output, session) {
           #fixed_str <- gsub("\\+\\s*1$", "", strip_lme4_random(f_str))
           
           
-          model <- nlme::lme(
+          fit <- fit_with_diagnostics(nlme::lme(
             fixed = as.formula(fixed_str),
             random = random_formula,
             correlation = correlation,
             data = df,
             method = "REML"
-          )
+          ))
+          if (inherits(fit$result, "FlexibleGLMM_fit_error")) stop(fit$result$error)
+          model <- fit$result
+          fit_warnings <- fit$warnings
           
           anova_tab <- anova(model)
         }
         
-        results[[custom_eq]] <- list(engine  = input$engine,formula = f_str, model = model, anova = anova_tab)
+        check_gamma_identity_positivity(model, input$family, input$linkfun)
+        results[[custom_eq]] <- list(engine = input$engine, formula = f_str, model = model, anova = anova_tab, warnings = fit_warnings)
       }, error = function(e) {
         results[[custom_eq]] <- list(formula = f_str, error = e$message)
       })
@@ -978,9 +1013,9 @@ server <- function(input, output, session) {
     
     # --- CASE 2: No custom equation, loop through IVs ---
     else {
-      x_vars <- input$x 
-      covs <- input$covariates 
-      inters <- input$interaction_vars 
+      x_vars <- input$x
+      covs <- input$covariates
+      inters <- input$interaction_vars
       rand_terms <- ifelse(nzchar(input$random_effects), input$random_effects, "1")
       mode <- input$interaction_mode
       
@@ -1006,6 +1041,8 @@ server <- function(input, output, session) {
         f <- as.formula(f_str)
         
         tryCatch({
+          fit_warnings <- character()
+          
           if (input$engine == "afex::mixed") {
             
             # AFEX rule:
@@ -1015,7 +1052,10 @@ server <- function(input, output, session) {
             fam_name <- input$family
             
             if (fam_name == "gaussian") {
-              model <- mixed(f, data = df, method = "KR")
+              fit <- fit_with_diagnostics(mixed(f, data = df, method = "KR"))
+              if (inherits(fit$result, "FlexibleGLMM_fit_error")) stop(fit$result$error)
+              model <- fit$result
+              fit_warnings <- fit$warnings
               anova_tab <- anova(model, ddf = "Kenward-Roger", type = 3)
             } else {
               # Remove link (AFEX does NOT support custom links)
@@ -1025,14 +1065,20 @@ server <- function(input, output, session) {
                 "binomial" = binomial(),
                 "poisson" = poisson()
               )
-              model <- mixed(f, data = df, family = base_family, method = "LRT")
+              fit <- fit_with_diagnostics(mixed(f, data = df, family = base_family, method = "LRT"))
+              if (inherits(fit$result, "FlexibleGLMM_fit_error")) stop(fit$result$error)
+              model <- fit$result
+              fit_warnings <- fit$warnings
               anova_tab <- anova(model)
             }
-          } 
+          }
           else if (input$engine == "lme4::glmer") {
-            model <- glmer(f, data = df, family = family,
-                           control = glmerControl(optimizer = "bobyqa",
-                                                  optCtrl = list(maxfun = 2e5)))
+            fit <- fit_with_diagnostics(glmer(f, data = df, family = family,
+                                              control = glmerControl(optimizer = "bobyqa",
+                                                                     optCtrl = list(maxfun = 2e5))))
+            if (inherits(fit$result, "FlexibleGLMM_fit_error")) stop(fit$result$error)
+            model <- fit$result
+            fit_warnings <- fit$warnings
             anova_tab <- anova(model)
           } else if (input$engine == "nlme::lme") {
             
@@ -1096,18 +1142,22 @@ server <- function(input, output, session) {
             fixed_str <- strip_lme4_random(f_str)
             #fixed_str <- gsub("\\+\\s*1$", "", strip_lme4_random(f_str))
             
-            model <- nlme::lme(
+            fit <- fit_with_diagnostics(nlme::lme(
               fixed = as.formula(fixed_str),
               random = random_formula,
               correlation = correlation,
               data = df,
               method = "REML"
-            )
+            ))
+            if (inherits(fit$result, "FlexibleGLMM_fit_error")) stop(fit$result$error)
+            model <- fit$result
+            fit_warnings <- fit$warnings
             
             anova_tab <- anova(model)
           }
           
-          results[[iv]] <- list(engine  = input$engine,formula = f_str, model = model, anova = anova_tab)
+          check_gamma_identity_positivity(model, input$family, input$linkfun)
+          results[[iv]] <- list(engine = input$engine, formula = f_str, model = model, anova = anova_tab, warnings = fit_warnings)
           
         }, error = function(e) {
           results[[iv]] <- list(formula = f_str, error = e$message)
@@ -1231,6 +1281,27 @@ server <- function(input, output, session) {
   }
   
   #----------------------
+  # Number of subjects / observations used in a fitted model
+  #----------------------
+  get_n_subjects_obs <- function(model) {
+    model_unwrapped <- unwrap_model(model)
+    n_obs <- tryCatch(stats::nobs(model_unwrapped), error = function(e) NA)
+    
+    n_subj <- tryCatch({
+      if (inherits(model_unwrapped, c("lmerMod", "glmerMod"))) {
+        grp_counts <- lme4::ngrps(model_unwrapped)
+        if (length(grp_counts) > 0) grp_counts[[1]] else NA
+      } else if (inherits(model_unwrapped, "lme")) {
+        length(unique(nlme::getGroups(model_unwrapped)))
+      } else {
+        NA
+      }
+    }, error = function(e) NA)
+    
+    list(n_subjects = n_subj, n_observations = n_obs)
+  }
+  
+  #----------------------
   # Model output
   #----------------------
   
@@ -1253,8 +1324,22 @@ server <- function(input, output, session) {
         cat("Correlation:", res$correlation, "\n")
       }
       if (!is.null(res$model)) {
+        n_info <- get_n_subjects_obs(res$model)
+        # get_model_sample_info(res$model,df)
+        cat("\n--- Sample size used in this fit ---\n")
+        cat("N subjects:", n_info$n_subjects, " | N observations:", n_info$n_observations, "\n")
+        
+        if (!is.null(res$warnings) && length(res$warnings) > 0) {
+          cat("\n--- Warnings raised during model fitting ---\n")
+          for (w in res$warnings) cat(" - ", w, "\n", sep = "")
+        } else {
+          cat("\n--- Warnings raised during model fitting: none ---\n")
+        }
+        
         print(summary(res$model))
         cat("\n=== Effect Sizes ===\n")
+        cat("(partial eta-squared via effectsize::eta_squared() on the ANOVA table;\n",
+            " a classical ANOVA-based measure - interpret cautiously for GLMMs)\n", sep = "")
         
         es <- extract_effect_sizes(res$model)
         
@@ -1263,7 +1348,7 @@ server <- function(input, output, session) {
           
           r2 <- attr(es, "R2")
           if (!is.null(r2)) {
-            cat("\n--- R-squared ---\n")
+            cat("\n--- R-squared (marginal/conditional, via performance::r2()) ---\n")
             print(r2)
           }
         } else {
@@ -1333,6 +1418,11 @@ server <- function(input, output, session) {
       res <- results[[nm]]
       
       if (is.list(res) && length(ph_vars) > 0) {
+        
+        cat("(Intervals below are confidence intervals for the estimated mean,\n",
+            " not prediction intervals. Unadjusted pairwise contrasts are shown\n",
+            " first, followed by Tukey-adjusted contrasts within the family of\n",
+            " pairwise comparisons for each selected factor.)\n", sep = "")
         
         ## --- Main effects + pairwise contrasts ---
         for (fac in ph_vars) {
@@ -1532,7 +1622,7 @@ server <- function(input, output, session) {
   
   
   # ---------------------------------
-  # Output Table
+  # Output Table (Summary Table tab)
   # ---------------------------------
   
   observe({
@@ -1783,7 +1873,7 @@ server <- function(input, output, session) {
     do.call(tabsetPanel, tabs)
   })
   
-
+  
   # ------------------------------------------------------------------
   # UNIFIED DIAGNOSTICS UI
   # ------------------------------------------------------------------
@@ -1801,34 +1891,34 @@ server <- function(input, output, session) {
       
       safe <- make.names(nm)
       
-  # ---------------------------
-  # Cook's Distance Plot
-  # ---------------------------
- 
-   output[[paste0("cooks_", safe)]] <- renderPlot({
+      # ---------------------------
+      # Cook's Distance Plot
+      # ---------------------------
+      
+      output[[paste0("cooks_", safe)]] <- renderPlot({
         
-      try({
+        try({
           
-        req(ncol(df_num) > 1)
+          req(ncol(df_num) > 1)
           
-        formula <- as.formula(
-          #paste(names(df_num)[1], "~", paste(names(df_num)[-1], collapse = "+"))
-          paste(names(df_num)[1], "~", paste(names(df_num)[2], collapse = "+"))
+          formula <- as.formula(
+            #paste(names(df_num)[1], "~", paste(names(df_num)[-1], collapse = "+"))
+            paste(names(df_num)[1], "~", paste(names(df_num)[2], collapse = "+"))
           )
           
-        model <- lm(formula, data = df_num)
+          model <- lm(formula, data = df_num)
           
-        cooks_d <- cooks.distance(model)
-        cutoff <- 4 / length(cooks_d)
+          cooks_d <- cooks.distance(model)
+          cutoff <- 4 / length(cooks_d)
           
-        plot(cooks_d, type = "h",
-           main = "Cook's Distance",
-           sub = paste("Model:", deparse(formula)),
-           ylab = "Distance", xlab = "Observation")
+          plot(cooks_d, type = "h",
+               main = "Cook's Distance",
+               sub = paste("Model:", deparse(formula)),
+               ylab = "Distance", xlab = "Observation")
           
-        abline(h = cutoff, lty = 2)
+          abline(h = cutoff, lty = 2)
           
-        # highlight outliers
+          # highlight outliers
           points(which(cooks_d > cutoff),
                  cooks_d[cooks_d > cutoff],
                  pch = 19)
@@ -1871,7 +1961,7 @@ server <- function(input, output, session) {
       
     })
   })
-
+  
   output$diagnostics_ui <- renderUI({
     
     results <- runModels()
@@ -1923,8 +2013,11 @@ server <- function(input, output, session) {
         dharma_obj <- simulateResiduals(model_obj)
       }
       
+      n_info <- get_n_subjects_obs(res$model)
+      
       rmarkdown::render(
         "report_template.Rmd",
+        #system.file("app", "report_template.Rmd", package = "FlexibleGLMM"),
         output_file = file,
         params = list(
           model = model_obj,
@@ -1932,12 +2025,131 @@ server <- function(input, output, session) {
           formula = res$formula,
           engine = res$engine,
           family = input$family,
-          dharma = dharma_obj
+          dharma = dharma_obj,
+          singular_fit = check_singularity_flag(model_obj),
+          convergence = check_convergence_flag(model_obj),
+          n_subjects = n_info$n_subjects,
+          n_observations = n_info$n_observations,
+          fit_warnings = res$warnings,
+          session_info = utils::capture.output(utils::sessionInfo())
         ),
         envir = new.env(parent = globalenv())
       )
     }
   )
+  
+  
+  # ============================================================
+  # 1. Engine/family/link validation
+  # ============================================================
+  
+  valid_family_links <- function(engine, family, link) {
+    if (engine == "nlme::lme") {
+      return(family == "gaussian" && link %in% c("default", "identity"))
+    }
+    
+    if (engine == "afex::mixed") {
+      # Current app's non-Gaussian afex path uses the family only and does
+      # not pass arbitrary custom links. Gaussian uses the identity link.
+      if (family == "gaussian")
+        return(link %in% c("default", "identity"))
+      return(link == "default")
+    }
+    
+    # lme4::glmer: validate against the family object rather than exposing
+    # every link to every family.
+    allowed <- list(
+      gaussian = c("default", "identity", "log", "inverse", "sqrt"),
+      gamma    = c("default", "inverse", "identity", "log"),
+      binomial = c("default", "logit", "probit", "cloglog", "log"),
+      poisson  = c("default", "log", "identity", "sqrt")
+    )
+    
+    isTRUE(family %in% names(allowed) && link %in% allowed[[family]])
+  }
+  
+  observeEvent(
+    list(input$engine, input$family, input$linkfun),
+    {
+      ok <- valid_family_links(input$engine, input$family, input$linkfun)
+      
+      if (!ok) {
+        showNotification(
+          paste(
+            "The selected family/link/engine combination is not supported.",
+            "Choose a compatible combination."
+          ),
+          type = "error",
+          duration = 8
+        )
+      }
+    },
+    ignoreInit = TRUE
+  )
+  
+  # ============================================================
+  # 4. Capture warnings information
+  # ============================================================
+  #----------------------
+  # Capture every warning raised while fitting a model, regardless of
+  # engine (afex::mixed, lme4::glmer, nlme::lme all raise warnings
+  # differently - e.g. glmer's structured optinfo messages vs. plain
+  # base warnings from afex/nlme). This lets FlexibleGLMM surface
+  # convergence/boundary-fit warnings uniformly instead of relying on
+  # each engine's own warning mechanism.
+  #
+  # Returns list(result, warnings): on success, result is the fitted
+  # model; on failure, result is a "FlexibleGLMM_fit_error" object
+  # carrying the error message, so the caller can distinguish a failed
+  # fit from a successful-but-noisy one.
+  #----------------------
+  
+  ## Add @1733 - warnings <- fit_with_diagnostics(model_obj)
+  
+  fit_with_diagnostics <- function(expr, model = NULL) {
+    warnings <- character()
+    
+    value <- withCallingHandlers(
+      tryCatch(
+        expr,
+        error = function(e) {
+          structure(
+            list(error = conditionMessage(e)),
+            class = "FlexibleGLMM_fit_error"
+          )
+        }
+      ),
+      warning = function(w) {
+        warnings <<- c(warnings, conditionMessage(w))
+        invokeRestart("muffleWarning")
+      }
+    )
+    
+    list(
+      result = value,
+      warnings = unique(warnings)
+    )
+  }
+  
+  # get_model_sample_info <- function(model, data, grouping_var = NULL) {
+  #   
+  #   mf <- tryCatch(stats::model.frame(model), error = function(e) NULL)
+  #   
+  #   n_obs <- if (is.null(mf)) NA_integer_ else nrow(mf)
+  #   
+  #   n_subjects <- NA_integer_
+  #   
+  #   if (!is.null(grouping_var) && grouping_var %in% names(mf)) {
+  #     n_subjects <- length(unique(mf[[grouping_var]]))
+  #   }
+  #   
+  #   list(
+  #     n_observations = n_obs,
+  #     n_subjects = n_subjects,
+  #     rows_available = nrow(data),
+  #     rows_excluded = nrow(data) - n_obs
+  #   )
+  # }
   
   # ------------------------------------------------------------------
   # Distribution fitting that runs ONLY for the selected dependent variable
