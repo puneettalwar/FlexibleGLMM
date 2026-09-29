@@ -355,8 +355,8 @@ model_summary_server <- function(input, output, session, rv, runModels) {
       n_info <- get_n_subjects_obs(res$model)
 
       rmarkdown::render(
-        #system.file("app", "report_template.Rmd", package = "FlexibleGLMM"),
-        "report_template.Rmd",
+        system.file("app", "report_template.Rmd", package = "FlexibleGLMM"),
+        #"report_template.Rmd",
         output_file = file,
         params = list(
           model = model_obj,

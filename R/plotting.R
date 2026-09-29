@@ -7,27 +7,25 @@
 # plotting_server() is called from server.R.
 #**************************************************************
 
-current_data <- reactive({
+plotting_server <- function(input, output, session, rv) {
 
-  if (!is.null(rv$processed_data))
-    return(rv$processed_data)
-
-  if (!is.null(rv$data_no_outliers))
-    return(rv$data_no_outliers)
-
-  if (!is.null(rv$cleaned_data))
-    return(rv$cleaned_data)
-
-  if (!is.null(rv$selected_data))
-    return(rv$selected_data)
-
-  rv$data
-})
-
-
-plotting_server <- function(input, output, session) {
+  # Keep this reactive inside plotting_server(), where rv is in scope.
+  current_data <- reactive({
+    if (!is.null(rv$processed_data)) {
+      rv$processed_data
+    } else if (!is.null(rv$data_no_outliers)) {
+      rv$data_no_outliers
+    } else if (!is.null(rv$cleaned_data)) {
+      rv$cleaned_data
+    } else if (!is.null(rv$selected_data)) {
+      rv$selected_data
+    } else {
+      rv$data
+    }
+  })
 
   output$boxplot_var_selector <- renderUI({
+
     #df <- rv$selected_data
     df <- current_data()
     req(df)
@@ -37,9 +35,10 @@ plotting_server <- function(input, output, session) {
 
   output$boxplot_output <- renderPlot({
     req(input$y, input$boxplot_cats)
-    #df <- rv$selected_data
     df <- current_data()
-    ggplot(df, aes_string(x = input$boxplot_cats, y = input$y)) +
+    req(df, input$y %in% names(df), input$boxplot_cats %in% names(df))
+    ggplot(df, aes(x = .data[[input$boxplot_cats]],
+                   y = .data[[input$y]])) +
       geom_boxplot(fill = "lightblue") +
       theme_bw() +
       labs(title = paste("Boxplot of", input$y, "by", input$boxplot_cats))
@@ -47,9 +46,10 @@ plotting_server <- function(input, output, session) {
 
   output$t_test_output <- renderPrint({
     req(input$y, input$boxplot_cats)
-    #df <- rv$selected_data
     df <- current_data()
-    pairwise.t.test(df[[input$y]], df[[input$boxplot_cats]], p.adjust.method = "none")
+    req(df, input$y %in% names(df), input$boxplot_cats %in% names(df))
+    pairwise.t.test(df[[input$y]], df[[input$boxplot_cats]],
+                    p.adjust.method = "none")
   })
 
   output$corr_iv_selector <- renderUI({
@@ -62,9 +62,12 @@ plotting_server <- function(input, output, session) {
 
   corr_plot_reactive <- reactive({
     req(input$y, input$corr_iv)
-    #df <- rv$selected_data
     df <- current_data()
-    ggplot(df, aes_string(x = input$corr_iv, y = input$y)) +
+    req(df, input$y %in% names(df), input$corr_iv %in% names(df))
+    validate(need(is.numeric(df[[input$y]]),
+                  "The dependent variable must be numeric for correlation plots."))
+    ggplot(df, aes(x = .data[[input$corr_iv]],
+                   y = .data[[input$y]])) +
       geom_point() +
       geom_smooth(method = "lm", se = TRUE) +
       theme_bw() +
@@ -74,8 +77,11 @@ plotting_server <- function(input, output, session) {
 
   output$corr_stats <- renderPrint({
     req(input$y, input$corr_iv)
-    #df <- rv$selected_data
     df <- current_data()
+    req(df, input$y %in% names(df), input$corr_iv %in% names(df))
+    validate(need(is.numeric(df[[input$y]]) &&
+                    is.numeric(df[[input$corr_iv]]),
+                  "Both variables must be numeric for correlation analysis."))
     sp <- cor.test(df[[input$corr_iv]], df[[input$y]], method = "spearman")
 
     reg <- summary(lm(df[[input$y]] ~ df[[input$corr_iv]]))
