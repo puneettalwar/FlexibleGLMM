@@ -1614,7 +1614,7 @@ server <- function(input, output, session) {
   }
   
   format_table <- function(df) {
-    df |>
+    df %>%
       dplyr::mutate(
         dplyr::across(where(is.numeric), ~ round(.x, 4))
       )
@@ -1652,7 +1652,7 @@ server <- function(input, output, session) {
               format  = "html",
               caption = paste("Model results:", name),
               align   = "l"
-            ) |>
+            ) %>%
               kableExtra::kable_styling(
                 bootstrap_options = c("striped", "hover", "condensed"),
                 full_width = TRUE,
@@ -2104,9 +2104,7 @@ server <- function(input, output, session) {
   # fit from a successful-but-noisy one.
   #----------------------
   
-  ## Add @1733 - warnings <- fit_with_diagnostics(model_obj)
-  
-  fit_with_diagnostics <- function(expr, model = NULL) {
+   fit_with_diagnostics <- function(expr, model = NULL) {
     warnings <- character()
     
     value <- withCallingHandlers(
@@ -2235,7 +2233,9 @@ server <- function(input, output, session) {
     req(input$y, input$boxplot_cats)
     #df <- rv$selected_data
     df <- current_data()
-    ggplot(df, aes_string(x = input$boxplot_cats, y = input$y)) +
+    req(df, input$y %in% names(df), input$boxplot_cats %in% names(df))
+    ggplot(df, aes(x = .data[[input$boxplot_cats]],
+                   y = .data[[input$y]])) +
       geom_boxplot(fill = "lightblue") +
       theme_bw() +
       labs(title = paste("Boxplot of", input$y, "by", input$boxplot_cats))
@@ -2245,6 +2245,7 @@ server <- function(input, output, session) {
     req(input$y, input$boxplot_cats)
     #df <- rv$selected_data
     df <- current_data()
+    req(df, input$y %in% names(df), input$boxplot_cats %in% names(df))
     pairwise.t.test(df[[input$y]], df[[input$boxplot_cats]], p.adjust.method = "none")
   })
   
@@ -2258,9 +2259,12 @@ server <- function(input, output, session) {
   
   corr_plot_reactive <- reactive({
     req(input$y, input$corr_iv)
-    #df <- rv$selected_data
     df <- current_data()
-    ggplot(df, aes_string(x = input$corr_iv, y = input$y)) + 
+    req(df, input$y %in% names(df), input$corr_iv %in% names(df))
+    validate(need(is.numeric(df[[input$y]]),
+                  "The dependent variable must be numeric for correlation plots."))
+    ggplot(df, aes(x = .data[[input$corr_iv]],
+                   y = .data[[input$y]])) +
       geom_point() +
       geom_smooth(method = "lm", se = TRUE) +
       theme_bw() +
@@ -2270,8 +2274,11 @@ server <- function(input, output, session) {
   
   output$corr_stats <- renderPrint({
     req(input$y, input$corr_iv)
-    #df <- rv$selected_data
     df <- current_data()
+    req(df, input$y %in% names(df), input$corr_iv %in% names(df))
+    validate(need(is.numeric(df[[input$y]]) &&
+                    is.numeric(df[[input$corr_iv]]),
+                  "Both variables must be numeric for correlation analysis."))
     sp <- cor.test(df[[input$corr_iv]], df[[input$y]], method = "spearman")
     
     reg <- summary(lm(df[[input$y]] ~ df[[input$corr_iv]]))
