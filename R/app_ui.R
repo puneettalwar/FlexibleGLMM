@@ -113,7 +113,7 @@ app_ui <- function(request) {
         actionButton("apply_standardization", "Apply data standardization"),
         actionButton("open_data_view", "View Processed Data"),
         hr(),
-        p("Multiple y and x inputs are allowed"),
+        p("Multiple responses run as separate univariate mixed models."),
         uiOutput("yInput"),
         hr(),
         p("For fit distribution check dependent variable must be a numeric"),
@@ -168,7 +168,22 @@ app_ui <- function(request) {
         textInput("time_var","Optional Time variable for AR structures (e.g., trial, block, day, session)"),
         hr(),
         uiOutput("posthoc_vars_ui"),
-        textInput("custom_eq", "Custom model equation (overrides auto)", value = ""),
+        #textInput("custom_eq", "Custom model equation (overrides auto)", value = ""),
+        div(
+          id = "custom_eq_panel",
+          tags$b("Custom model equation (advanced)"),
+          helpText(
+            "Enter a COMPLETE call to afex::mixed(), lme4::glmer()/lmer(), or ",
+            "nlme::lme() - e.g. ",
+            tags$code("nlme::lme(Reaction_time ~ Days, random = ~1|Subject, ",
+                      "weights = varIdent(form = ~1|Sex), method = \"REML\")"),
+            ". The working dataset is referenced as ", tags$code("df"),
+            " (FlexibleGLMM will add data = df automatically to the model).",
+          ),
+          textAreaInput("custom_eq", label = NULL, value = "", rows = 4,
+                        placeholder = "e.g. nlme::lme(Reaction_time ~ Days, random = ~1|Subject, weights = varIdent(form = ~1|Sex), method = \"REML\")",
+                        width = "100%")
+        ),
         actionButton("run", "Run Models")
       ),
 
@@ -180,10 +195,10 @@ app_ui <- function(request) {
                        br(),
                        tags$b(style="color:#2c3e6b;", "The current version of Flexible GLMM toolbox can be used to"),br(),
                        br(),
-                       "- fit GLMM models using afex and glmer R packages",br(),
+                       "- fit GLMM models using afex, lme4 and nlme R packages",br(),
                        "- get results similar to SAS outputs" ,br(),
                        "- identify fit distribution family for the dependent variables" ,br(),
-                       "- run analysis for a multiple dependent and independent variables simultaneously",br(),
+                       "- run analysis for multiple responses run as separate univariate mixed models",br(),
                        br(),
                        tags$b(style="color:#3f6fb5;", "Usage:"),br(),
                        br(),
@@ -191,7 +206,7 @@ app_ui <- function(request) {
                        "- By default first sheet will be used as the input. Ex. mtcars, sleepstudy (lme4)",br(),
                        "- Missing values are blank/empty cells in the data",br(),
 
-                       "- For outlier removal specify the standard deviation value (ex. 3)",br(),
+                       "- Before using outlier removal please refer to respective package manuals",br(),
 
                        "- Multiple covariates can be selected from the input data (age sex bmi)",br(),
 

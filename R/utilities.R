@@ -73,6 +73,109 @@ check_convergence_flag <- function(model) {
   "OK"
 }
 
+ALLOWED_CUSTOM_CALL_FNS <- c(
+  # model-fitting entry points
+  "mixed", "glmer", "lmer", "lme",
+  # formula / language constructs
+  "~", "+", "-", "*", "/", ":", "^", "(", "{", "|",
+  # families
+  "gaussian", "Gamma", "binomial", "poisson", "inverse.gaussian",
+  # nlme variance & correlation structures
+  "varIdent", "varPower", "varExp", "varConstPower", "varComb", "varFixed",
+  "corAR1", "corCompSymm", "corSymm", "corExp", "corGaus", "corLin", "corRatio", "corSpher", "corCAR1",
+  # fitting controls
+  "lmerControl", "glmerControl", "lmeControl", "nlmeControl",
+  # safe generic helpers occasionally needed inside arguments
+  "c", "list", "I"
+)
+
+# Recursively walk a parsed call tree and stop() on the first function
+# symbol found anywhere (outermost call or nested inside any argument)
+# that is not in `allowed`. Non-call nodes (symbols, constants, missing
+# args) are left alone.
+check_call_safety <- function(expr, allowed = ALLOWED_CUSTOM_CALL_FNS) {
+  if (is.call(expr)) {
+    fn <- expr[[1]]
+    fn_name <- if (is.symbol(fn)) {
+      as.character(fn)
+    } else if (is.call(fn) && identical(fn[[1]], as.symbol("::"))) {
+      as.character(fn[[3]])
+    } else {
+      NA_character_
+    }
+
+    if (is.na(fn_name) || !(fn_name %in% allowed)) {
+      stop(sprintf(
+        "Function '%s' is not permitted in a custom model equation. Allowed functions: %s.",
+        if (is.na(fn_name)) deparse(fn) else fn_name,
+        paste(allowed, collapse = ", ")
+      ), call. = FALSE)
+    }
+
+    for (a in as.list(expr)[-1]) {
+      check_call_safety(a, allowed)
+    }
+  }
+  invisible(TRUE)
+}
+
+# Parse + validate the custom-equation text box into a ready-to-evaluate
+# call. Returns list(engine, expr, fn_name); `expr$data` is always
+# overwritten to point at `df` regardless of what the user typed.
+parse_custom_model_call <- function(text) {
+  text <- trimws(text)
+  if (!nzchar(text)) {
+    stop("Custom equation is empty.", call. = FALSE)
+  }
+
+  expr <- tryCatch(str2lang(text), error = function(e) {
+    stop(paste("Could not parse custom equation as R code:", conditionMessage(e)), call. = FALSE)
+  })
+
+  if (!is.call(expr)) {
+    stop(
+      "Custom equation must be a full function call, e.g. ",
+      "nlme::lme(y ~ x, random = ~1|Subject, data = df).",
+      call. = FALSE
+    )
+  }
+
+  fn <- expr[[1]]
+  fn_name <- if (is.symbol(fn)) {
+    as.character(fn)
+  } else if (is.call(fn) && identical(fn[[1]], as.symbol("::"))) {
+    as.character(fn[[3]])
+  } else {
+    NA_character_
+  }
+
+  engine <- switch(fn_name,
+                   "mixed" = "afex::mixed",
+                   "glmer" = "lme4::glmer",
+                   "lmer"  = "lme4::lmer",
+                   "lme"   = "nlme::lme",
+                   NA_character_
+  )
+
+  if (is.na(engine)) {
+    stop(sprintf(
+      paste(
+        "Custom equation must call afex::mixed(), lme4::glmer()/lmer(),",
+        "or nlme::lme() - got '%s'."
+      ),
+      if (is.na(fn_name)) deparse(fn) else fn_name
+    ), call. = FALSE)
+  }
+
+  check_call_safety(expr)
+
+  # Always force data = df, overwriting anything the user typed, so the
+  # call can only ever run against FlexibleGLMM's current working dataset.
+  expr$data <- quote(df)
+
+  list(engine = engine, expr = expr, fn_name = fn_name)
+}
+
 #----------------------
 # Capture every warning raised while fitting a model, regardless of
 # engine (afex::mixed, lme4::glmer, nlme::lme all raise warnings

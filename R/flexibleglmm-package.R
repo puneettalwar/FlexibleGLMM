@@ -23,8 +23,8 @@
 #' @import fitdistrplus
 #' @importFrom shinyjs useShinyjs
 #' @importFrom DT DTOutput renderDT datatable
-#' @importFrom lme4 glmer glmerControl isSingular
-#' @importFrom nlme corAR1 corCompSymm corSymm corExp
+#' @importFrom lme4 glmer glmerControl lmer lmerControl isSingular
+#' @importFrom nlme corAR1 corCompSymm corSymm corExp corGaus corLin corRatio corSpher corCAR1 varIdent varPower varExp varConstPower varComb varFixed lmeControl
 #' @importFrom DHARMa simulateResiduals testUniformity testDispersion testOutliers testZeroInflation
 #' @importFrom emmeans emmeans contrast
 #' @importFrom afex mixed
