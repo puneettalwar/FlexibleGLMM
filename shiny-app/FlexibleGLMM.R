@@ -231,7 +231,22 @@ ui <- fluidPage(
       textInput("time_var","Optional Time variable for AR structures (e.g., trial, block, day, session)"),
       hr(),
       uiOutput("posthoc_vars_ui"),
-      textInput("custom_eq", "Custom model equation (overrides auto)", value = ""),
+      #textInput("custom_eq", "Custom model equation (overrides auto)", value = ""),
+      div(
+        id = "custom_eq_panel",
+        tags$b("Custom model equation (advanced)"),
+        helpText(
+          "Enter a COMPLETE call to afex::mixed(), lme4::glmer()/lmer(), or ",
+          "nlme::lme() - e.g. ",
+          tags$code("nlme::lme(Reaction_time ~ Days, random = ~1|Subject, ",
+                    "weights = varIdent(form = ~1|Sex), method = \"REML\")"),
+          ". The working dataset is referenced as ", tags$code("df"),
+          " (FlexibleGLMM will add data = df automatically to the model).",
+        ),
+        textAreaInput("custom_eq", label = NULL, value = "", rows = 4,
+                      placeholder = "e.g. nlme::lme(Reaction_time ~ Days, random = ~1|Subject, weights = varIdent(form = ~1|Sex), method = \"REML\")",
+                      width = "100%")
+      ),
       actionButton("run", "Run Models")
     ),
     
@@ -243,10 +258,10 @@ ui <- fluidPage(
                      br(),
                      tags$b(style="color:#2c3e6b;", "The current version of Flexible GLMM toolbox can be used to"),br(),
                      br(),
-                     "- fit GLMM models using afex and glmer R packages",br(),
+                     "- fit GLMM models using afex, lme4 and nlme R packages",br(),
                      "- get results similar to SAS outputs" ,br(),
                      "- identify fit distribution family for the dependent variables" ,br(),
-                     "- run analysis for a multiple dependent and independent variables simultaneously",br(),
+                     "- run analysis for multiple responses run as separate univariate mixed models",br(),
                      br(),
                      tags$b(style="color:#3f6fb5;", "Usage:"),br(),
                      br(),
@@ -254,13 +269,12 @@ ui <- fluidPage(
                      "- By default first sheet will be used as the input. Ex. mtcars, sleepstudy (lme4)",br(),
                      "- Missing values are blank/empty cells in the data",br(),
                      
-                     "- For outlier removal specify the standard deviation value (ex. 3)",br(),
+                     "- Before using outlier removal please refer to respective package manuals",br(),
                      
                      "- Multiple covariates can be selected from the input data (age sex bmi)",br(),
                      
                      "- For family of distributions Refer- https://www.rdocumentation.org/packages/stats/versions/3.6.2/topics/family",br(),
                      
-                     "- Custom equation format : y ~ x1 + x2",br(),
                      br(),
                      
                      tags$b(style="color:#b5533f;", "Note:"),br(),
@@ -827,6 +841,128 @@ server <- function(input, output, session) {
   strip_lme4_random <- function(formula_string) {
     gsub("\\+?\\s*\\([^\\)]*\\|[^\\)]*\\)", "", formula_string)
   }
+
+#--------------------------------  
+### Custom model equation ###
+#--------------------------------  
+  
+  observe({
+    rv$selected_data
+    custom_eq_val <- if (is.null(input$custom_eq)) "" else input$custom_eq
+    custom_mode <- nzchar(trimws(custom_eq_val))
+    
+    ignored_when_custom <- c(
+      "y", "x", "covariates", "interaction_vars", "interaction_mode",
+      "family", "linkfun", "engine", "corStruct",
+      "random_effects", "nlme_random", "group_var", "time_var"
+    )
+    for (id in ignored_when_custom) {
+      shinyjs::toggleState(id = id, condition = !custom_mode)
+    }
+  })
+  
+  ALLOWED_CUSTOM_CALL_FNS <- c(
+    # model-fitting entry points
+    "mixed", "glmer", "lmer", "lme",
+    # formula / language constructs
+    "~", "+", "-", "*", "/", ":", "^", "(", "{", "|",
+    # families
+    "gaussian", "Gamma", "binomial", "poisson", "inverse.gaussian",
+    # nlme variance & correlation structures
+    "varIdent", "varPower", "varExp", "varConstPower", "varComb", "varFixed",
+    "corAR1", "corCompSymm", "corSymm", "corExp", "corGaus", "corLin", "corRatio", "corSpher", "corCAR1",
+    # fitting controls
+    "lmerControl", "glmerControl", "lmeControl", "nlmeControl",
+    # safe generic helpers occasionally needed inside arguments
+    "c", "list", "I"
+  )
+  
+  # Recursively walk a parsed call tree and stop() on the first function
+  # symbol found anywhere (outermost call or nested inside any argument)
+  # that is not in `allowed`. Non-call nodes (symbols, constants, missing
+  # args) are left alone.
+  check_call_safety <- function(expr, allowed = ALLOWED_CUSTOM_CALL_FNS) {
+    if (is.call(expr)) {
+      fn <- expr[[1]]
+      fn_name <- if (is.symbol(fn)) {
+        as.character(fn)
+      } else if (is.call(fn) && identical(fn[[1]], as.symbol("::"))) {
+        as.character(fn[[3]])
+      } else {
+        NA_character_
+      }
+      
+      if (is.na(fn_name) || !(fn_name %in% allowed)) {
+        stop(sprintf(
+          "Function '%s' is not permitted in a custom model equation. Allowed functions: %s.",
+          if (is.na(fn_name)) deparse(fn) else fn_name,
+          paste(allowed, collapse = ", ")
+        ), call. = FALSE)
+      }
+      
+      for (a in as.list(expr)[-1]) {
+        check_call_safety(a, allowed)
+      }
+    }
+    invisible(TRUE)
+  }
+  
+  # Parse + validate the custom-equation text box into a ready-to-evaluate
+  # call. Returns list(engine, expr, fn_name); `expr$data` is always
+  # overwritten to point at `df` regardless of what the user typed.
+  parse_custom_model_call <- function(text) {
+    text <- trimws(text)
+    if (!nzchar(text)) {
+      stop("Custom equation is empty.", call. = FALSE)
+    }
+    
+    expr <- tryCatch(str2lang(text), error = function(e) {
+      stop(paste("Could not parse custom equation as R code:", conditionMessage(e)), call. = FALSE)
+    })
+    
+    if (!is.call(expr)) {
+      stop(
+        "Custom equation must be a full function call, e.g. ",
+        "nlme::lme(y ~ x, random = ~1|Subject, data = df).",
+        call. = FALSE
+      )
+    }
+    
+    fn <- expr[[1]]
+    fn_name <- if (is.symbol(fn)) {
+      as.character(fn)
+    } else if (is.call(fn) && identical(fn[[1]], as.symbol("::"))) {
+      as.character(fn[[3]])
+    } else {
+      NA_character_
+    }
+    
+    engine <- switch(fn_name,
+                     "mixed" = "afex::mixed",
+                     "glmer" = "lme4::glmer",
+                     "lmer"  = "lme4::lmer",
+                     "lme"   = "nlme::lme",
+                     NA_character_
+    )
+    
+    if (is.na(engine)) {
+      stop(sprintf(
+        paste(
+          "Custom equation must call afex::mixed(), lme4::glmer()/lmer(),",
+          "or nlme::lme() - got '%s'."
+        ),
+        if (is.na(fn_name)) deparse(fn) else fn_name
+      ), call. = FALSE)
+    }
+    
+    check_call_safety(expr)
+    
+    # Always force data = df, overwriting anything the user typed, so the
+    # call can only ever run against FlexibleGLMM's current working dataset.
+    expr$data <- quote(df)
+    
+    list(engine = engine, expr = expr, fn_name = fn_name)
+  }
   
   #----------------------
   # Run models
@@ -834,7 +970,8 @@ server <- function(input, output, session) {
   
   runModels <- eventReactive(input$run, {
     #req(rv$selected_data, input$y, input$x, input$random_effects)
-    req(rv$selected_data, input$y)
+    #req(rv$selected_data, input$y)
+    req(rv$selected_data)
     df <- current_data()
     # df <- if (!is.null(rv$data_no_outliers)) rv$data_no_outliers else 
     #   if (!is.null(rv$cleaned_data)) rv$cleaned_data else rv$selected_data
@@ -864,6 +1001,9 @@ server <- function(input, output, session) {
     
     family <- get_family(input$family, input$linkfun)
     
+    custom_eq <- trimws(input$custom_eq)
+    #mode <- input$interaction_mode
+        
     # Positivity check for Gamma models with an identity link
     check_gamma_identity_positivity <- function(model, family_name, link_name) {
       if (!identical(family_name, "gamma") || !identical(link_name, "identity")) {
@@ -886,128 +1026,52 @@ server <- function(input, output, session) {
       invisible(NULL)
     }
     
-    
-    custom_eq <- trimws(input$custom_eq)
-    #mode <- input$interaction_mode
-    
+
     results <- list()
     
     # --- CASE 1: Custom equation provided ---
     if (nzchar(custom_eq)) {
-      f_str <- if (grepl("~", custom_eq)) custom_eq else paste(input$y, "~", custom_eq)
-      # if (!grepl("\\|", f_str) && nzchar(input$random_effects)) {
-      #   f_str <- paste(f_str, "+", input$random_effects)
-      # }
-      if (input$engine != "nlme::lme") {
-        if (!grepl("\\|", f_str) && nzchar(input$random_effects)) {
-          f_str <- paste(f_str, "+", input$random_effects)
-        }
-      }
-      f <- as.formula(f_str)
-      
       tryCatch({
-        fit_warnings <- character()
+        parsed <- parse_custom_model_call(custom_eq)
         
-        if (input$engine == "afex::mixed") {
-          if (input$family == "gaussian") {
-            fit <- fit_with_diagnostics(mixed(f, data = df, method = "KR"))
-            if (inherits(fit$result, "FlexibleGLMM_fit_error")) stop(fit$result$error)
-            model <- fit$result
-            fit_warnings <- fit$warnings
-            anova_tab <- anova(model, ddf = "Kenward-Roger", type = 3)
-          }
-        } else if (input$engine == "lme4::glmer") {
-          base_family <- switch(
-            input$family,
-            "gamma"    = Gamma(),
-            "binomial" = binomial(),
-            "poisson"  = poisson()
-          )
-          fit <- fit_with_diagnostics(mixed(f, data = df, family = base_family, method = "LRT"))
-          if (inherits(fit$result, "FlexibleGLMM_fit_error")) stop(fit$result$error)
-          model <- fit$result
-          fit_warnings <- fit$warnings
-          anova_tab <- anova(model)
-        }else if(input$engine == "nlme::lme") {
-          if (input$family != "gaussian")
-            stop("nlme::lme only supports Gaussian models.")
-          
-          # --- Random effects: nlme ONLY ---
-          nlme_random <- trimws(input$nlme_random)
-          
-          random_formula <- if (nzchar(nlme_random)) {
-            as.formula(nlme_random)
-          } else {
-            as.formula(paste0("~1|", input$group_var))
-          }
-          
-          # --- Extract top-level subject ---
-          subject_var <- get_nlme_subject(
-            if (nzchar(nlme_random)) nlme_random else paste0("~1|", input$group_var)
-          )
-          
-          df <- prepare_nlme_data(df, subject_var)
-          
-          # --- Correlation handling ---
-          can_use_corr <- nlme_can_use_correlation(df, subject_var)
-          
-          suggested_corr <- suggest_correlation_structure(
-            df,
-            subject_var = subject_var,
-            time_var = input$time_var
-          )
-          
-          cor_choice <- input$corStruct
-          if (cor_choice == "auto") cor_choice <- suggested_corr
-          
-          correlation <- NULL
-          corr_used <- "none"
-          
-          if (can_use_corr && cor_choice != "none") {
-            correlation <- get_nlme_corStruct(
-              cor_choice,
-              subject_var,
-              input$time_var
-            )
-            corr_used <- cor_choice
-          }
-          
-          if (!can_use_corr && cor_choice != "none") {
-            showNotification(
-              "Residual correlation disabled: insufficient repeated measures.",
-              type = "warning"
-            )
-          }
-          
-          showNotification(
-            paste("Correlation used:", corr_used),
-            type = "message",
-            duration = 4
-          )
-          
-          # --- FIXED formula ONLY (no +1, no random terms) ---
-          fixed_str <- strip_lme4_random(f_str)
-          #fixed_str <- gsub("\\+\\s*1$", "", strip_lme4_random(f_str))
-          
-          
-          fit <- fit_with_diagnostics(nlme::lme(
-            fixed = as.formula(fixed_str),
-            random = random_formula,
-            correlation = correlation,
-            data = df,
-            method = "REML"
-          ))
-          if (inherits(fit$result, "FlexibleGLMM_fit_error")) stop(fit$result$error)
-          model <- fit$result
-          fit_warnings <- fit$warnings
-          
-          anova_tab <- anova(model)
+        # Evaluate in a child of this function's own environment so the
+        # call can see package-internal, NAMESPACE-imported functions
+        # (mixed, glmer, lmer, lme, varIdent, corAR1, ...) exactly as
+        # the rest of this file does, while `df` resolves to the app's
+        # current working dataset - and nothing else the user might
+        # have tried to reference.
+        eval_env <- list2env(list(df = df), parent = environment())
+        fit <- fit_with_diagnostics(eval(parsed$expr, envir = eval_env))
+        if (inherits(fit$result, "FlexibleGLMM_fit_error")) stop(fit$result$error)
+        model <- fit$result
+        fit_warnings <- fit$warnings
+        
+        # ANOVA method is chosen from the fitted object's own class,
+        # not a UI selector, since custom mode may not match
+        # input$engine/input$family at all.
+        anova_tab <- if (inherits(model, "mixed")) {
+          tryCatch(anova(model, ddf = "Kenward-Roger", type = 3),
+                   error = function(e) anova(model))
+        } else {
+          anova(model)
         }
         
-        check_gamma_identity_positivity(model, input$family, input$linkfun)
-        results[[custom_eq]] <- list(engine = input$engine, formula = f_str, model = model, anova = anova_tab, warnings = fit_warnings)
+        # Likewise, the Gamma-identity positivity check reads the
+        # family/link back off the fitted model itself (nlme::lme
+        # objects have no family() method and are skipped, correctly,
+        # since lme is Gaussian-only).
+        model_unwrapped <- unwrap_model(model)
+        fam_info <- tryCatch(stats::family(model_unwrapped), error = function(e) NULL)
+        if (!is.null(fam_info)) {
+          check_gamma_identity_positivity(model, tolower(fam_info$family), fam_info$link)
+        }
+        
+        results[[custom_eq]] <- list(
+          engine = parsed$engine, formula = deparse(parsed$expr),
+          model = model, anova = anova_tab, warnings = fit_warnings
+        )
       }, error = function(e) {
-        results[[custom_eq]] <- list(formula = f_str, error = e$message)
+        results[[custom_eq]] <- list(formula = custom_eq, error = e$message)
       })
     }
     
