@@ -19,6 +19,96 @@ params:
 ```{r setup, echo=FALSE, message=FALSE, warning=FALSE}
 library(knitr)
 library(kableExtra)
+
+# Render a data.frame as a styled HTML table and write it straight into the
+# document (for use in results='asis' chunks). format = "html" is always set
+# explicitly: with the default (markdown/pipe) format, kable escapes literal
+# "|" characters - e.g. in "Pr(>|t|)" - as "&#124;", which then shows up
+# verbatim in the report.
+html_table <- function(df, caption = NULL, row.names = FALSE, align = NULL) {
+  tbl <- knitr::kable(df, format = "html", caption = caption,
+                      row.names = row.names, align = align)
+  tbl <- kableExtra::kable_styling(
+    tbl,
+    bootstrap_options = c("striped", "hover", "condensed"),
+    full_width = FALSE
+  )
+  cat(as.character(tbl), "\n")
+  invisible(tbl)
+}
+
+# Evaluate an expression, returning NULL instead of an error/warning/message.
+quiet <- function(expr) {
+  tryCatch(suppressWarnings(suppressMessages(expr)), error = function(e) NULL)
+}
+
+# Tidy random-effects table with BOTH variance and standard deviation, for
+# lme4 (merMod) and nlme (lme) models.
+extract_random_effects <- function(model) {
+
+  if (inherits(model, "merMod")) {
+    vc <- as.data.frame(lme4::VarCorr(model))
+    is_var <- is.na(vc$var2)
+
+    components <- data.frame(
+      Group      = as.character(vc$grp[is_var]),
+      Effect     = ifelse(is.na(vc$var1[is_var]), "(Residual)", as.character(vc$var1[is_var])),
+      Variance   = signif(vc$vcov[is_var], 4),
+      `Std.Dev.` = signif(vc$sdcor[is_var], 4),
+      check.names = FALSE, stringsAsFactors = FALSE
+    )
+
+    correlations <- NULL
+    if (any(!is_var)) {
+      correlations <- data.frame(
+        Group       = as.character(vc$grp[!is_var]),
+        Effects     = paste(vc$var1[!is_var], vc$var2[!is_var], sep = " ~ "),
+        Covariance  = signif(vc$vcov[!is_var], 4),
+        Correlation = signif(vc$sdcor[!is_var], 4),
+        stringsAsFactors = FALSE
+      )
+    }
+    return(list(components = components, correlations = correlations))
+  }
+
+  if (inherits(model, "lme")) {
+    # nlme::VarCorr() returns a character matrix with "Variance"/"StdDev"
+    # columns, plus group header rows such as "Subject = pdLogChol(1)".
+    vc <- unclass(nlme::VarCorr(model))
+    rn <- trimws(rownames(vc))
+    has_corr <- "Corr" %in% colnames(vc)
+    cur_group <- NA_character_
+    rows <- list()
+
+    for (i in seq_along(rn)) {
+      if (grepl("=", rn[i], fixed = TRUE)) {
+        cur_group <- trimws(sub("=.*$", "", rn[i]))
+        next
+      }
+      variance <- suppressWarnings(as.numeric(vc[i, "Variance"]))
+      if (is.na(variance)) next
+
+      row <- data.frame(
+        Group      = if (identical(rn[i], "Residual")) "Residual" else cur_group,
+        Effect     = rn[i],
+        Variance   = signif(variance, 4),
+        `Std.Dev.` = signif(suppressWarnings(as.numeric(vc[i, "StdDev"])), 4),
+        check.names = FALSE, stringsAsFactors = FALSE
+      )
+      if (has_corr) row$Corr <- trimws(vc[i, "Corr"])
+      rows[[length(rows) + 1]] <- row
+    }
+
+    if (length(rows) == 0) return(NULL)
+    components <- do.call(rbind, rows)
+    if (has_corr && all(is.na(components$Corr) | components$Corr == "")) {
+      components$Corr <- NULL
+    }
+    return(list(components = components, correlations = NULL))
+  }
+
+  NULL
+}
 ```
 
 ## Methods
@@ -74,11 +164,7 @@ if (length(diag_rows) > 0) {
     Result = unlist(diag_rows, use.names = FALSE),
     stringsAsFactors = FALSE
   )
-  print(
-    kable(diag_df, row.names = FALSE, align = "l") %>%
-      kable_styling(bootstrap_options = c("striped", "hover", "condensed"),
-                    full_width = FALSE)
-  )
+  html_table(diag_df, align = "l")
 } else {
   cat("_No singularity/convergence information was supplied for this model._\n")
 }
@@ -102,81 +188,126 @@ if (!is.null(params$fit_warnings) && length(params$fit_warnings) > 0) {
 
 ## Results
 
+### Model Summary
+
+Full summary output of the fitted model, as printed by R.
+
 ```{r model-summary, echo=FALSE, message=FALSE, warning=FALSE}
-model_summary <- summary(params$model)
+old_opts <- options(width = 110)
+tryCatch(
+  print(summary(params$model)),
+  error = function(e) cat("Model summary not available for this model:", conditionMessage(e), "\n")
+)
+options(old_opts)
 ```
 
 ### Random Effects
-```{r random-effects, echo=FALSE}
-if (!is.null(model_summary$varcor)) {
-  print(model_summary$varcor)
+
+Both the **variance** (σ²) and the **standard deviation** (σ) of each random-effect
+term are shown. The residual row is the within-group (observation-level) variance.
+
+```{r random-effects, echo=FALSE, results='asis'}
+re <- tryCatch(extract_random_effects(params$model), error = function(e) NULL)
+
+if (!is.null(re) && nrow(re$components) > 0) {
+  html_table(re$components, caption = "Random-effects variance components")
+
+  if (!is.null(re$correlations)) {
+    html_table(re$correlations, caption = "Random-effects covariances and correlations")
+  }
+
+  if (inherits(params$model, "glmerMod")) {
+    cat("\n\n_For non-Gaussian GLMMs the random-effects variances are on the link",
+        "(latent) scale, and there is no separate residual variance._\n")
+  }
+
+  # nlme only: residual correlation (correlation=) and variance (weights=) structures
+  if (inherits(params$model, "lme")) {
+    describe_struct <- function(s, label) {
+      if (is.null(s)) return(invisible(NULL))
+      pars <- tryCatch(coef(s, unconstrained = FALSE), error = function(e) NULL)
+      pstr <- ""
+      if (length(pars) > 0) {
+        nm <- names(pars)
+        if (is.null(nm)) nm <- seq_along(pars)
+        pstr <- paste0(" (", paste(nm, signif(pars, 4), sep = " = ", collapse = ", "), ")")
+      }
+      cat("\n\n**", label, ":** `", class(s)[1], "`", pstr, "\n", sep = "")
+    }
+    describe_struct(params$model$modelStruct$corStruct, "Residual correlation structure")
+    describe_struct(params$model$modelStruct$varStruct, "Residual variance structure (weights)")
+  }
 } else {
-  cat("Random-effects variance-covariance summary not available for this model.\n")
+  cat("_Random-effects variance components could not be extracted for this model._\n")
 }
 ```
 
 ### Fixed Effects
+
 ```{r fixed-effects, results='asis', echo=FALSE}
-# Extract the fixed-effects coefficient table in a way that works for both
-# lme4 and nlme models.  In particular, summary.lme() stores the fixed
-# effects in a structure that differs from lme4's summary objects.
-coef_table <- tryCatch(
-  coef(summary(params$model)),
-  error = function(e) NULL
-)
+# nlme: summary(model)$tTable holds the fixed-effects table. Do NOT use
+# coef(summary(model)) here - for an lme object that dispatches to
+# coef.lme and returns per-subject coefficients instead.
+# lme4: coef(summary(model)) returns the fixed-effects matrix.
+coef_table <- if (inherits(params$model, "lme")) {
+  tryCatch(summary(params$model)$tTable, error = function(e) NULL)
+} else {
+  tryCatch(coef(summary(params$model)), error = function(e) NULL)
+}
 
 if (is.null(coef_table)) {
-  coef_table <- model_summary$coefficients
+  coef_table <- tryCatch(summary(params$model)$coefficients, error = function(e) NULL)
 }
 
-coef_df <- as.data.frame(coef_table, stringsAsFactors = FALSE)
+if (is.null(coef_table)) {
+  cat("_Fixed-effects table not available for this model._\n")
+} else {
 
-# Standardise nlme column names to the names used by lme4 where possible.
-# nlme::summary.lme() typically returns: Value, Std.Error, DF, t-value, p-value.
-nlme_names <- c(
-  "Value" = "Estimate",
-  "Std.Error" = "Std. Error",
-  "DF" = "df",
-  "t-value" = "t value",
-  "p-value" = "Pr(>|t|"
-)
-for (old_name in intersect(names(nlme_names), names(coef_df))) {
-  names(coef_df)[names(coef_df) == old_name] <- nlme_names[[old_name]]
-}
+  coef_df <- as.data.frame(coef_table, stringsAsFactors = FALSE)
 
-# Round numeric columns for readability
-if ("Estimate" %in% names(coef_df))    coef_df$Estimate    <- round(coef_df$Estimate, 3)
-if ("Std. Error" %in% names(coef_df))  coef_df$`Std. Error` <- round(coef_df$`Std. Error`, 3)
-if ("df" %in% names(coef_df))          coef_df$df          <- round(coef_df$df, 0)
-if ("t value" %in% names(coef_df))     coef_df$`t value`   <- round(coef_df$`t value`, 3)
-
-# Identify the p-value column. Keep the numeric values long enough to compute
-# significance stars, then format them only for display.
- p_col <- intersect(c("Pr(>|t|)", "Pr(>|z|)"), names(coef_df))
-
-if (length(p_col) == 1) {
-  p_numeric <- suppressWarnings(as.numeric(coef_df[[p_col]]))
-
-  sig_stars <- cut(
-    p_numeric,
-    breaks = c(-Inf, 0.001, 0.01, 0.05, 0.1, Inf),
-    labels = c("***", "**", "*", ".", "")
+  # Standardise nlme column names to the lme4 names.
+  # nlme tTable columns: Value, Std.Error, DF, t-value, p-value
+  nlme_names <- c(
+    "Value"     = "Estimate",
+    "Std.Error" = "Std. Error",
+    "DF"        = "df",
+    "t-value"   = "t value",
+    "p-value"   = "Pr(>|t|)"
   )
+  for (old_name in intersect(names(nlme_names), names(coef_df))) {
+    names(coef_df)[names(coef_df) == old_name] <- nlme_names[[old_name]]
+  }
 
-  coef_df[[p_col]] <- format.pval(
-    p_numeric,
-    digits = 3,
-    eps = 0.0001
-  )
-  coef_df$" " <- sig_stars
+  # Round numeric columns for readability
+  if ("Estimate" %in% names(coef_df))    coef_df$Estimate     <- round(coef_df$Estimate, 3)
+  if ("Std. Error" %in% names(coef_df))  coef_df$`Std. Error` <- round(coef_df$`Std. Error`, 3)
+  if ("df" %in% names(coef_df))          coef_df$df           <- round(coef_df$df, 0)
+  if ("t value" %in% names(coef_df))     coef_df$`t value`    <- round(coef_df$`t value`, 3)
+  if ("z value" %in% names(coef_df))     coef_df$`z value`    <- round(coef_df$`z value`, 3)
+
+  # Keep p-values numeric long enough to compute significance stars, then
+  # format for display.
+  p_col <- intersect(c("Pr(>|t|)", "Pr(>|z|)"), names(coef_df))
+
+  if (length(p_col) == 1) {
+    p_numeric <- suppressWarnings(as.numeric(coef_df[[p_col]]))
+
+    sig_stars <- cut(
+      p_numeric,
+      breaks = c(-Inf, 0.001, 0.01, 0.05, 0.1, Inf),
+      labels = c("***", "**", "*", ".", "")
+    )
+
+    coef_df[[p_col]] <- format.pval(p_numeric, digits = 3, eps = 0.0001)
+    coef_df$" " <- sig_stars
+  }
+
+  html_table(coef_df, caption = "Fixed Effects", row.names = TRUE)
 }
-
-kable(coef_df, caption = "Fixed Effects", row.names = TRUE, align = "r", format = "html") %>%
-  kable_styling(bootstrap_options = c("striped", "hover", "condensed"),
-                full_width = FALSE)
 ```
 
 ### ANOVA (Type III)
+
 ```{r anova, echo=FALSE}
 if (!is.null(params$anova)) {
   print(params$anova)
@@ -185,7 +316,86 @@ if (!is.null(params$anova)) {
 }
 ```
 
+### Model Performance
+
+```{r performance, echo=FALSE, results='asis'}
+mdl <- params$model
+
+r2   <- quiet(performance::r2_nakagawa(mdl))
+icc  <- quiet(performance::icc(mdl))
+perf <- quiet(performance::model_performance(mdl))
+
+# Safely pull a single numeric value out of a list / data.frame (or NULL)
+pull <- function(x, nm) {
+  if (!is.null(x) && !is.null(x[[nm]])) as.numeric(x[[nm]])[1] else NULL
+}
+
+add_metric <- function(df, label, value) {
+  if (is.null(value) || length(value) == 0 || !is.finite(value[1])) return(df)
+  rbind(df, data.frame(Metric = label, Value = signif(as.numeric(value[1]), 4),
+                       stringsAsFactors = FALSE))
+}
+
+r2_marginal    <- pull(r2, "R2_marginal")
+r2_conditional <- pull(r2, "R2_conditional")
+if (is.null(r2_marginal))    r2_marginal    <- pull(perf, "R2_marginal")
+if (is.null(r2_conditional)) r2_conditional <- pull(perf, "R2_conditional")
+
+icc_adjusted   <- pull(icc, "ICC_adjusted")
+icc_unadjusted <- pull(icc, "ICC_unadjusted")
+if (is.null(icc_adjusted)) icc_adjusted <- pull(perf, "ICC")
+
+var_df <- data.frame(Metric = character(), Value = numeric(), stringsAsFactors = FALSE)
+var_df <- add_metric(var_df, "R2 marginal (fixed effects only)", r2_marginal)
+var_df <- add_metric(var_df, "R2 conditional (fixed + random effects)", r2_conditional)
+var_df <- add_metric(var_df, "ICC (adjusted)", icc_adjusted)
+var_df <- add_metric(var_df, "ICC (unadjusted)", icc_unadjusted)
+
+if (nrow(var_df) > 0) {
+  html_table(var_df, caption = "Variance explained and clustering (R2, ICC)")
+} else {
+  cat("_R2 and ICC could not be computed for this model (for example, a model",
+      "with no random effects, or a model class not supported by the performance",
+      "package)._\n")
+}
+
+# Remaining fit indices (AIC, AICc, BIC, RMSE, Sigma, ...)
+if (!is.null(perf)) {
+  p <- as.data.frame(perf)
+  p <- p[, setdiff(names(p), c("R2", "R2_conditional", "R2_marginal", "ICC")), drop = FALSE]
+  if (ncol(p) > 0) {
+    fit_df <- data.frame(
+      Metric = names(p),
+      Value  = unname(vapply(p, function(x) signif(suppressWarnings(as.numeric(x[1])), 4), numeric(1))),
+      stringsAsFactors = FALSE
+    )
+    fit_df <- fit_df[is.finite(fit_df$Value), , drop = FALSE]
+    if (nrow(fit_df) > 0) {
+      html_table(fit_df, caption = "Information criteria and error measures")
+    }
+  }
+}
+
+is_reml <- tryCatch({
+  if (inherits(mdl, "merMod")) lme4::isREML(mdl)
+  else if (inherits(mdl, "lme")) identical(mdl$method, "REML")
+  else FALSE
+}, error = function(e) FALSE)
+
+cat("\n\n**How to read these measures**\n\n")
+cat("- **R2 marginal**: proportion of variance explained by the fixed effects alone.\n")
+cat("- **R2 conditional**: proportion of variance explained by the fixed and random effects together.\n")
+cat("- **ICC**: proportion of the total (non-fixed-effect) variance attributable to differences between groups/subjects; higher values mean observations within the same group are more alike.\n")
+if (inherits(mdl, "glmerMod")) {
+  cat("- For non-Gaussian GLMMs, R2 and ICC are computed on the latent (link) scale, so they are not directly comparable to Gaussian-model values.\n")
+}
+if (is_reml) {
+  cat("- This model was fitted by REML: AIC/BIC are only comparable between models with identical fixed effects. Refit by ML to compare models with different fixed effects.\n")
+}
+```
+
 ### DHARMa Residual Diagnostics
+
 ```{r dharma, echo=FALSE, fig.width=8, fig.height=5}
 if (!is.null(params$dharma)) {
   plot(params$dharma)
