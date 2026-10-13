@@ -238,13 +238,13 @@ ui <- fluidPage(
         helpText(
           "Enter a COMPLETE call to afex::mixed(), lme4::glmer()/lmer(), or ",
           "nlme::lme() - e.g. ",
-          tags$code("nlme::lme(Reaction_time ~ Days, random = ~1|Subject, ",
+          tags$code("lme(Reaction_time ~ Days, random = ~1|Subject, ",
                     "weights = varIdent(form = ~1|Sex), method = \"REML\")"),
           ". The working dataset is referenced as ", tags$code("df"),
           " (FlexibleGLMM will add data = df automatically to the model).",
         ),
         textAreaInput("custom_eq", label = NULL, value = "", rows = 4,
-                      placeholder = "e.g. nlme::lme(Reaction_time ~ Days, random = ~1|Subject, weights = varIdent(form = ~1|Sex), method = \"REML\")",
+                      placeholder = "e.g. lme(Reaction_time ~ Days, random = ~1|Subject, weights = varIdent(form = ~1|Sex), method = \"REML\")",
                       width = "100%")
       ),
       actionButton("run", "Run Models")
