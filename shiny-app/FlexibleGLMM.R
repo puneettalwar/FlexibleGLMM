@@ -869,7 +869,7 @@ server <- function(input, output, session) {
     # families
     "gaussian", "Gamma", "binomial", "poisson", "inverse.gaussian",
     # nlme variance & correlation structures
-    "varIdent", "varPower", "varExp", "varConstPower", "varComb", "varFixed",
+    "pdIdent","varIdent", "varPower", "varExp", "varConstPower", "varComb", "varFixed",
     "corAR1", "corCompSymm", "corSymm", "corExp", "corGaus", "corLin", "corRatio", "corSpher", "corCAR1",
     # fitting controls
     "lmerControl", "glmerControl", "lmeControl", "nlmeControl",
