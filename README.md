@@ -68,7 +68,7 @@ Users are welcome to report bugs, suggest new features, and contribute to future
 ________________________________________
 **Application Workflow**
 
-FlexibleGLMM follows a sequential workflow from raw data preprocessing to final reporting.
+FlexibleGLMM provides extended workflow from raw data preprocessing to final reporting.
         
 <div align="center">
 
@@ -148,7 +148,7 @@ ________________________________________
 **5. Distribution Fitting**
 
 For continuous dependent variables, FlexibleGLMM can compare candidate probability distributions using goodness-of-fit statistics.
-This helps users select an appropriate distribution prior to model fitting.
+This helps users check an appropriate distribution prior to model fitting.
 ________________________________________
 **6. Interaction Specification**
 
@@ -220,6 +220,7 @@ FlexibleGLMM supports analysis of:
 -	Multiple dependent variables
 -	Multiple independent variables
 within the same workflow, reducing repetitive model specification.
+Note: Multiple responses run as separate univariate mixed models.
 ________________________________________
 **Output Tabs**
 
@@ -237,14 +238,14 @@ Displays:
 -	Variable information
 -	Data tables
 ________________________________________
-**FitDist Output**
+**FitDist Output (Exploratory)**
 
 Provides:
 -	Distribution comparison statistics
 -	Goodness-of-fit metrics
 -	Ranked candidate distributions
 ________________________________________
-**Fit Distribution Plots**
+**Fit Distribution Plots (Exploratory)**
 
 Provides visual assessment through:
 -	Histograms
@@ -264,7 +265,7 @@ ________________________________________
 **ANOVA**
 
 Provides:
--	Type I/II/III tests
+-	Type III tests
 -	F-statistics
 -	Degrees of freedom
 -	p-values
@@ -294,13 +295,11 @@ Computes:
 -	Multiple comparison corrections
 using the emmeans package.
 ________________________________________
-**Summary Plots**
+**Summary Plots (Exploratory)**
 
 Creates:
--	Effect plots
--	Estimated marginal mean plots
--	Interaction plots
--	Confidence interval visualizations
+-	Box plots
+-	Correlation plots
 ________________________________________
 **Diagnostics**
 
@@ -315,11 +314,22 @@ ________________________________________
 **Auto Report**
 
 Automatically generates reproducible reports containing:
--	Data preprocessing summary
--	Model specification
--	Statistical results
--	Figures
--	Diagnostic outputs
+- model formula,
+- family and link,
+- engine,
+- estimation method,
+- optimizer where available,
+- random-effects structure,
+- residual correlation structure,
+- number of subjects,
+- number of observations,
+- model estimates,
+- ANOVA/inference,
+- EMMs,
+- performance measures,
+- diagnostics,
+- convergence warnings,
+- singularity status.
 ________________________________________
 **R Packages Used**
 
