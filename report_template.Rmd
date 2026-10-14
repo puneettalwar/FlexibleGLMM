@@ -325,9 +325,16 @@ r2   <- quiet(performance::r2_nakagawa(mdl))
 icc  <- quiet(performance::icc(mdl))
 perf <- quiet(performance::model_performance(mdl))
 
-# Safely pull a single numeric value out of a list / data.frame (or NULL)
+# Safely pull a single numeric value out of a list / data.frame. The
+# performance functions can return NULL, or a bare atomic NA (e.g. for random-
+# effects structures such as pdIdent that they cannot decompose); indexing an
+# atomic vector by name raises "subscript out of bounds", so only index lists.
 pull <- function(x, nm) {
-  if (!is.null(x) && !is.null(x[[nm]])) as.numeric(x[[nm]])[1] else NULL
+  if (is.list(x) && nm %in% names(x)) {
+    v <- suppressWarnings(as.numeric(x[[nm]]))
+    if (length(v) > 0) return(v[1])
+  }
+  NULL
 }
 
 add_metric <- function(df, label, value) {
@@ -354,9 +361,9 @@ var_df <- add_metric(var_df, "ICC (unadjusted)", icc_unadjusted)
 if (nrow(var_df) > 0) {
   html_table(var_df, caption = "Variance explained and clustering (R2, ICC)")
 } else {
-  cat("_R2 and ICC could not be computed for this model (for example, a model",
-      "with no random effects, or a model class not supported by the performance",
-      "package)._\n")
+  cat("_R2 and ICC are not available for this model: the performance package",
+      "could not compute them (for example, a model with no random effects, or an",
+      "unusual random-effects structure such as pdIdent)._\n")
 }
 
 # Remaining fit indices (AIC, AICc, BIC, RMSE, Sigma, ...)
