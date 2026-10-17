@@ -18,7 +18,7 @@ test_that("get_family applies a custom link when one is given", {
 test_that("strip_lme4_random removes a trailing random-effect term", {
   expect_equal(
     strip_lme4_random("y ~ x1 + x2 + (1|Subject)"),
-    "y ~ x1 + x2 "
+    "y ~ x1 + x2"
   )
   expect_equal(
     strip_lme4_random("y ~ x1 + (1 + Days | Subject)"),

@@ -19,7 +19,7 @@ test_that("uploading a CSV populates rv$data and rv$selected_data", {
   rv <- reactiveValues(data = NULL, selected_data = NULL, cleaned_data = NULL,
                         data_no_outliers = NULL, models = NULL)
 
-  testServer(data_processing_server, args = list(rv = rv), {
+  testServer(as_server(data_processing_server, rv), {
     session$setInputs(data_file = data.frame(
       name = "test.csv", size = file.size(tmp), type = "text/csv",
       datapath = tmp, stringsAsFactors = FALSE
@@ -36,7 +36,7 @@ test_that("apply_column_selection subsets rv$selected_data to the chosen columns
   rv <- reactiveValues(data = df, selected_data = df, cleaned_data = NULL,
                         data_no_outliers = NULL, models = NULL)
 
-  testServer(data_processing_server, args = list(rv = rv), {
+  testServer(as_server(data_processing_server, rv), {
     session$setInputs(selected_columns = c("Subject", "Reaction_time"))
     session$setInputs(apply_column_selection = 1)
     expect_equal(names(rv$selected_data), c("Subject", "Reaction_time"))
@@ -49,7 +49,7 @@ test_that("apply_var_types converts requested columns to factor/numeric", {
   rv <- reactiveValues(data = df, selected_data = df, cleaned_data = NULL,
                         data_no_outliers = NULL, models = NULL)
 
-  testServer(data_processing_server, args = list(rv = rv), {
+  testServer(as_server(data_processing_server, rv), {
     session$setInputs(factor_vars = c("Sex", "Subject"), numeric_vars = "Reaction_time")
     session$setInputs(apply_var_types = 1)
     expect_s3_class(rv$selected_data$Sex, "factor")
@@ -63,7 +63,7 @@ test_that("remove_missing drops rows with any NA and reports before/after dimens
   rv <- reactiveValues(data = df, selected_data = df, cleaned_data = NULL,
                         data_no_outliers = NULL, models = NULL)
 
-  testServer(data_processing_server, args = list(rv = rv), {
+  testServer(as_server(data_processing_server, rv), {
     session$setInputs(remove_missing = 1)
     expect_equal(nrow(rv$cleaned_data), sum(complete.cases(df)))
     expect_true(grepl("Before: 18", output$dimBefore))
@@ -77,7 +77,7 @@ test_that("Z-score outlier removal drops rows beyond the chosen SD cutoff", {
   rv <- reactiveValues(data = df, selected_data = df_complete, cleaned_data = df_complete,
                         data_no_outliers = NULL, models = NULL)
 
-  testServer(data_processing_server, args = list(rv = rv), {
+  testServer(as_server(data_processing_server, rv), {
     session$setInputs(outlier_method = "Z-score (SD cutoff)", n_sigmas = 1.5)
     session$setInputs(remove_outliers = 1)
     expect_true(nrow(rv$data_no_outliers) <= nrow(df_complete))
@@ -92,7 +92,7 @@ test_that("standardization with center-and-scale adds a matching _cs column", {
   rv <- reactiveValues(data = df, selected_data = df_complete, cleaned_data = df_complete,
                         data_no_outliers = NULL, models = NULL)
 
-  testServer(data_processing_server, args = list(rv = rv), {
+  testServer(as_server(data_processing_server, rv), {
     session$setInputs(standardize_vars = "Reaction_time", center_scale_mode = "center_scale")
     session$setInputs(apply_standardization = 1)
     expect_true("Reaction_time_cs" %in% names(rv$selected_data))
@@ -106,7 +106,7 @@ test_that("standardization with center-only adds a _c column, not _cs", {
   rv <- reactiveValues(data = df, selected_data = df_complete, cleaned_data = df_complete,
                         data_no_outliers = NULL, models = NULL)
 
-  testServer(data_processing_server, args = list(rv = rv), {
+  testServer(as_server(data_processing_server, rv), {
     session$setInputs(standardize_vars = "Reaction_time", center_scale_mode = "center_only")
     session$setInputs(apply_standardization = 1)
     expect_true("Reaction_time_c" %in% names(rv$selected_data))

@@ -19,14 +19,14 @@ test_that("custom-equation mode fits even when input$y/input$random_effects are 
   rv <- reactiveValues(selected_data = df, cleaned_data = NULL,
                         data_no_outliers = NULL, models = NULL)
 
-  testServer(model_fit_server, args = list(rv = rv), {
+  testServer(as_server(model_fit_server, rv), {
     # Deliberately NOT setting input$y, input$x, or input$random_effects -
     # the whole point of this mode is that it does not need them.
     session$setInputs(
       custom_eq = "nlme::lme(Reaction_time ~ Days, random = ~1|Subject, data = df, method = \"REML\")",
       run = 1
     )
-    results <- runModels()
+    results <- srv()
     expect_length(results, 1)
     res <- results[[1]]
     expect_null(res$error)
@@ -41,7 +41,7 @@ test_that("custom-equation mode supports weights = varIdent(...) for nlme::lme",
   rv <- reactiveValues(selected_data = df, cleaned_data = NULL,
                         data_no_outliers = NULL, models = NULL)
 
-  testServer(model_fit_server, args = list(rv = rv), {
+  testServer(as_server(model_fit_server, rv), {
     session$setInputs(
       custom_eq = paste0(
         "nlme::lme(Reaction_time ~ Days, random = ~1|Subject, ",
@@ -49,7 +49,7 @@ test_that("custom-equation mode supports weights = varIdent(...) for nlme::lme",
       ),
       run = 1
     )
-    results <- runModels()
+    results <- srv()
     res <- results[[1]]
     expect_null(res$error)
     expect_s3_class(res$model, "lme")
@@ -67,7 +67,7 @@ test_that("custom equation ignores sidebar family/engine/random-effects selectio
   rv <- reactiveValues(selected_data = df, cleaned_data = NULL,
                         data_no_outliers = NULL, models = NULL)
 
-  testServer(model_fit_server, args = list(rv = rv), {
+  testServer(as_server(model_fit_server, rv), {
     # Sidebar says afex::mixed/gaussian/(1|Subject) - the custom call
     # explicitly fits nlme::lme instead, and that must be what runs.
     session$setInputs(
@@ -77,7 +77,7 @@ test_that("custom equation ignores sidebar family/engine/random-effects selectio
       custom_eq = "nlme::lme(Reaction_time ~ Days, random = ~1|Subject, data = df)",
       run = 1
     )
-    results <- runModels()
+    results <- srv()
     res <- results[[1]]
     expect_equal(res$engine, "nlme::lme")
     expect_s3_class(res$model, "lme")
@@ -89,10 +89,10 @@ test_that("a malicious custom equation is rejected, not evaluated", {
   rv <- reactiveValues(selected_data = df, cleaned_data = NULL,
                         data_no_outliers = NULL, models = NULL)
 
-  marker_file <- tempfile()
+  marker_file <- gsub("\\\\", "/", tempfile())
   on.exit(unlink(marker_file), add = TRUE)
 
-  testServer(model_fit_server, args = list(rv = rv), {
+  testServer(as_server(model_fit_server, rv), {
     session$setInputs(
       custom_eq = sprintf(
         "mixed(Reaction_time ~ Days, data = df, weights = file.create(\"%s\"))",
@@ -100,7 +100,7 @@ test_that("a malicious custom equation is rejected, not evaluated", {
       ),
       run = 1
     )
-    results <- runModels()
+    results <- srv()
     res <- results[[1]]
     expect_true(!is.null(res$error))
     expect_true(grepl("not permitted", res$error))
@@ -115,9 +115,9 @@ test_that("a custom equation calling a disallowed top-level function is rejected
   rv <- reactiveValues(selected_data = df, cleaned_data = NULL,
                         data_no_outliers = NULL, models = NULL)
 
-  testServer(model_fit_server, args = list(rv = rv), {
+  testServer(as_server(model_fit_server, rv), {
     session$setInputs(custom_eq = "lm(Reaction_time ~ Days, data = df)", run = 1)
-    results <- runModels()
+    results <- srv()
     res <- results[[1]]
     expect_true(!is.null(res$error))
     expect_true(grepl("must call afex::mixed", res$error))
@@ -129,12 +129,12 @@ test_that("data = is always forced to the app's working dataset even if the user
   rv <- reactiveValues(selected_data = df, cleaned_data = NULL,
                         data_no_outliers = NULL, models = NULL)
 
-  testServer(model_fit_server, args = list(rv = rv), {
+  testServer(as_server(model_fit_server, rv), {
     session$setInputs(
-      custom_eq = "mixed(Reaction_time ~ Days, data = some_dataframe_that_does_not_exist, method = \"KR\")",
+      custom_eq = "mixed(Reaction_time ~ Days + (1|Subject), data = some_dataframe_that_does_not_exist, method = \"KR\")",
       run = 1
     )
-    results <- runModels()
+    results <- srv()
     res <- results[[1]]
     # Should succeed using the real df, not error about a missing object.
     expect_null(res$error)
