@@ -857,7 +857,8 @@ server <- function(input, output, session) {
       "random_effects", "nlme_random", "group_var", "time_var"
     )
     for (id in ignored_when_custom) {
-      shinyjs::toggleState(id = id, condition = !custom_mode)
+      #shinyjs::toggleState(id = id, condition = !custom_mode)
+      try(shinyjs::toggleState(id = id, condition = !custom_mode), silent = TRUE)
     }
   })
   
@@ -935,6 +936,14 @@ server <- function(input, output, session) {
       as.character(fn[[3]])
     } else {
       NA_character_
+    }
+    
+    if (identical(fn_name, "~")) {
+      stop(
+        "Custom equation must be a full function call, e.g. ",
+        "lme(y ~ x, random = ~1|Subject, data = df) - a bare formula is not enough.",
+        call. = FALSE
+      )
     }
     
     engine <- switch(fn_name,
@@ -1077,6 +1086,8 @@ server <- function(input, output, session) {
     
     # --- CASE 2: No custom equation, loop through IVs ---
     else {
+      req(input$y)
+      family <- get_family(input$family, input$linkfun)
       x_vars <- input$x
       covs <- input$covariates
       inters <- input$interaction_vars
@@ -2297,9 +2308,10 @@ server <- function(input, output, session) {
     req(input$y, input$boxplot_cats)
     #df <- rv$selected_data
     df <- current_data()
-    req(df, input$y %in% names(df), input$boxplot_cats %in% names(df))
-    ggplot(df, aes(x = .data[[input$boxplot_cats]],
-                   y = .data[[input$y]])) +
+    #req(df, input$y %in% names(df), input$boxplot_cats %in% names(df))
+    # ggplot(df, aes(x = .data[[input$boxplot_cats]],
+    #                y = .data[[input$y]])) +
+    ggplot(df, aes_string(x = input$boxplot_cats, y = input$y)) +
       geom_boxplot(fill = "lightblue") +
       theme_bw() +
       labs(title = paste("Boxplot of", input$y, "by", input$boxplot_cats))
@@ -2309,7 +2321,7 @@ server <- function(input, output, session) {
     req(input$y, input$boxplot_cats)
     #df <- rv$selected_data
     df <- current_data()
-    req(df, input$y %in% names(df), input$boxplot_cats %in% names(df))
+    #req(df, input$y %in% names(df), input$boxplot_cats %in% names(df))
     pairwise.t.test(df[[input$y]], df[[input$boxplot_cats]], p.adjust.method = "none")
   })
   
@@ -2324,11 +2336,12 @@ server <- function(input, output, session) {
   corr_plot_reactive <- reactive({
     req(input$y, input$corr_iv)
     df <- current_data()
-    req(df, input$y %in% names(df), input$corr_iv %in% names(df))
+    #req(df, input$y %in% names(df), input$corr_iv %in% names(df))
     validate(need(is.numeric(df[[input$y]]),
                   "The dependent variable must be numeric for correlation plots."))
-    ggplot(df, aes(x = .data[[input$corr_iv]],
-                   y = .data[[input$y]])) +
+    # ggplot(df, aes(x = .data[[input$corr_iv]],
+    #                y = .data[[input$y]])) +
+      ggplot(df, aes_string(x = input$corr_iv, y = input$y)) +
       geom_point() +
       geom_smooth(method = "lm", se = TRUE) +
       theme_bw() +
@@ -2339,7 +2352,7 @@ server <- function(input, output, session) {
   output$corr_stats <- renderPrint({
     req(input$y, input$corr_iv)
     df <- current_data()
-    req(df, input$y %in% names(df), input$corr_iv %in% names(df))
+    #req(df, input$y %in% names(df), input$corr_iv %in% names(df))
     validate(need(is.numeric(df[[input$y]]) &&
                     is.numeric(df[[input$corr_iv]]),
                   "Both variables must be numeric for correlation analysis."))
