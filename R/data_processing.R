@@ -41,7 +41,7 @@ data_processing_server <- function(input, output, session, rv) {
   observeEvent(input$apply_column_selection, {
     req(rv$data, input$selected_columns)
     rv$selected_data <- rv$data[, input$selected_columns, drop = FALSE]
-    showNotification("Column selection applied", type = "message")
+    notify("Column selection applied", type = "message")
   })
 
   #----------------------
@@ -91,7 +91,7 @@ data_processing_server <- function(input, output, session, rv) {
     rv$selected_data <- df
     rv$processed_data <- df
 
-    showNotification(
+    notify(
       "Variable types applied successfully",
       type = "message"
     )
@@ -134,17 +134,7 @@ data_processing_server <- function(input, output, session, rv) {
 
   observeEvent(input$remove_outliers, {
 
-    #df <- if (is.null(rv$cleaned_data)) rv$selected_data else rv$cleaned_data
-
-    df <- if (!is.null(rv$processed_data))
-      rv$processed_data
-    else if (!is.null(rv$data_no_outliers))
-      rv$data_no_outliers
-    else if (!is.null(rv$cleaned_data))
-      rv$cleaned_data
-    else
-      rv$selected_data
-
+    df <- if (is.null(rv$cleaned_data)) rv$selected_data else rv$cleaned_data
     req(df)
 
     method <- input$outlier_method
@@ -327,7 +317,7 @@ data_processing_server <- function(input, output, session, rv) {
     rv$selected_data <- df
     rv$processed_data <- df
 
-    showNotification(
+    notify(
       "Data standardization applied successfully",
       type = "message"
     )
@@ -340,18 +330,8 @@ data_processing_server <- function(input, output, session, rv) {
 
   observe({
     req(rv$selected_data)
-    # df <- if (!is.null(rv$data_no_outliers)) rv$data_no_outliers else
-    #   if (!is.null(rv$cleaned_data)) rv$cleaned_data else rv$selected_data
-
-    df <- if (!is.null(rv$processed_data))
-      rv$processed_data
-    else if (!is.null(rv$data_no_outliers))
-      rv$data_no_outliers
-    else if (!is.null(rv$cleaned_data))
-      rv$cleaned_data
-    else
-      rv$selected_data
-
+    df <- if (!is.null(rv$data_no_outliers)) rv$data_no_outliers else
+      if (!is.null(rv$cleaned_data)) rv$cleaned_data else rv$selected_data
 
     output$yInput <- renderUI({
       selectInput("y", "Dependent Variable (y)", choices = names(df))

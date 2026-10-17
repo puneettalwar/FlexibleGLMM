@@ -151,7 +151,7 @@ extract_table <- function(model) {
 }
 
 format_table <- function(df) {
-  df %>%
+  df |>
     dplyr::mutate(
       dplyr::across(where(is.numeric), ~ round(.x, 4))
     )
@@ -234,7 +234,6 @@ model_summary_server <- function(input, output, session, rv, runModels) {
     }
   })
 
-
   #----------------------
   # ANOVA output
   #----------------------
@@ -298,7 +297,7 @@ model_summary_server <- function(input, output, session, rv, runModels) {
               format  = "html",
               caption = paste("Model results:", name),
               align   = "l"
-            ) %>%
+            ) |>
               kableExtra::kable_styling(
                 bootstrap_options = c("striped", "hover", "condensed"),
                 full_width = TRUE,
@@ -354,27 +353,47 @@ model_summary_server <- function(input, output, session, rv, runModels) {
 
       n_info <- get_n_subjects_obs(res$model)
 
+      template <- system.file("app", "report_template.Rmd", package = "FlexibleGLMM")
+      if (!nzchar(template)) {
+        stop("report_template.Rmd not found in the installed FlexibleGLMM package ",
+             "(expected at inst/app/report_template.Rmd). Reinstall the package.",
+             call. = FALSE)
+      }
+
+      all_params <- list(
+        model = model_obj,
+        anova = res$anova,
+        formula = res$formula,
+        engine = res$engine,
+        family = input$family,
+        dharma = dharma_obj,
+        singular_fit = check_singularity_flag(model_obj),
+        convergence = check_convergence_flag(model_obj),
+        n_subjects = n_info$n_subjects,
+        n_observations = n_info$n_observations,
+        fit_warnings = res$warnings,
+        session_info = utils::capture.output(utils::sessionInfo())
+      )
+
+      # Only pass params the template actually declares in its YAML header;
+      # rmarkdown::render() errors on undeclared params, which would otherwise
+      # break report download whenever an older template is installed.
+      declared <- names(rmarkdown::yaml_front_matter(template)$params)
+      dropped <- setdiff(names(all_params), declared)
+      if (length(dropped) > 0) {
+        notify(
+          paste("Report template does not declare:", paste(dropped, collapse = ", "),
+                "- reinstall FlexibleGLMM to get the updated template."),
+          type = "warning", duration = 8
+        )
+      }
+
       rmarkdown::render(
-        system.file("app", "report_template.Rmd", package = "FlexibleGLMM"),
-        #"report_template.Rmd",
+        template,
         output_file = file,
-        params = list(
-          model = model_obj,
-          anova = res$anova,
-          formula = res$formula,
-          engine = res$engine,
-          family = input$family,
-          dharma = dharma_obj,
-          singular_fit = check_singularity_flag(model_obj),
-          convergence = check_convergence_flag(model_obj),
-          n_subjects = n_info$n_subjects,
-          n_observations = n_info$n_observations,
-          fit_warnings = res$warnings,
-          session_info = utils::capture.output(utils::sessionInfo())
-        ),
+        params = all_params[names(all_params) %in% declared],
         envir = new.env(parent = globalenv())
       )
     }
   )
 }
-

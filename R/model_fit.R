@@ -12,6 +12,12 @@
 
 model_fit_server <- function(input, output, session, rv) {
 
+  # Visually communicate that the structured controls are ignored while
+  # a custom equation is in use (they are already functionally ignored
+  # in runModels() below - this just makes that visible in the sidebar).
+  # Re-runs on rv$selected_data too, so the dimming is correctly (re)
+  # applied to the y/x/covariates/interaction selectors, which only
+  # exist in the DOM once data has been uploaded and rendered.
   observe({
     rv$selected_data
     custom_eq_val <- if (is.null(input$custom_eq)) "" else input$custom_eq
@@ -23,27 +29,21 @@ model_fit_server <- function(input, output, session, rv) {
       "random_effects", "nlme_random", "group_var", "time_var"
     )
     for (id in ignored_when_custom) {
-      shinyjs::toggleState(id = id, condition = !custom_mode)
+      # cosmetic only - never let a missing/not-yet-rendered input break the app
+      try(shinyjs::toggleState(id = id, condition = !custom_mode), silent = TRUE)
     }
   })
 
   runModels <- eventReactive(input$run, {
-    #req(rv$selected_data, input$y, input$x, input$random_effects)
+    # Only rv$selected_data is required unconditionally. input$y is only
+    # needed for the structured (Case 2) workflow below; the custom-
+    # equation path (Case 1) is a standalone power-user mode that does
+    # not depend on the dependent-variable dropdown, random-effects box,
+    # or any other sidebar selector - the user's typed call is the only
+    # source of truth for what gets fit.
     req(rv$selected_data)
-
-    # df <- if (!is.null(rv$data_no_outliers)) rv$data_no_outliers else
-    #   if (!is.null(rv$cleaned_data)) rv$cleaned_data else rv$selected_data
-
-    df <- if (!is.null(rv$processed_data))
-      rv$processed_data
-    else if (!is.null(rv$data_no_outliers))
-      rv$data_no_outliers
-    else if (!is.null(rv$cleaned_data))
-      rv$cleaned_data
-    else
-      rv$selected_data
-
-    family <- get_family(input$family, input$linkfun)
+    df <- if (!is.null(rv$data_no_outliers)) rv$data_no_outliers else
+      if (!is.null(rv$cleaned_data)) rv$cleaned_data else rv$selected_data
 
     custom_eq <- trimws(input$custom_eq)
     #mode <- input$interaction_mode
@@ -51,6 +51,16 @@ model_fit_server <- function(input, output, session, rv) {
     results <- list()
 
     # --- CASE 1: Custom equation provided ---
+    #
+    # This mode is intentionally standalone: it does not read input$y,
+    # input$random_effects, input$nlme_random/group_var/time_var/
+    # corStruct, input$family, or input$linkfun. The text box must
+    # contain a complete call to afex::mixed(), lme4::glmer()/lmer(),
+    # or nlme::lme(), so any option those functions expose - including
+    # nlme's weights = varIdent(form = ~1|group) - can be used, not
+    # just the subset the sidebar has a control for. See
+    # parse_custom_model_call() / check_call_safety() in utilities.R
+    # for how the typed text is validated before being evaluated.
     if (nzchar(custom_eq)) {
       tryCatch({
         parsed <- parse_custom_model_call(custom_eq)
@@ -72,7 +82,7 @@ model_fit_server <- function(input, output, session, rv) {
         # input$engine/input$family at all.
         anova_tab <- if (inherits(model, "mixed")) {
           tryCatch(anova(model, ddf = "Kenward-Roger", type = 3),
-                   error = function(e) anova(model))
+                    error = function(e) anova(model))
         } else {
           anova(model)
         }
@@ -92,12 +102,16 @@ model_fit_server <- function(input, output, session, rv) {
           model = model, anova = anova_tab, warnings = fit_warnings
         )
       }, error = function(e) {
-        results[[custom_eq]] <- list(formula = custom_eq, error = e$message)
+        results[[custom_eq]] <<- list(formula = custom_eq, error = e$message)
       })
     }
 
     # --- CASE 2: No custom equation, loop through IVs ---
     else {
+      req(input$y)
+      # Only the structured workflow uses the family/link dropdowns; the
+      # custom-equation path above must not read them.
+      family <- get_family(input$family, input$linkfun)
       x_vars <- input$x
       covs <- input$covariates
       inters <- input$interaction_vars
@@ -159,8 +173,8 @@ model_fit_server <- function(input, output, session, rv) {
           }
           else if (input$engine == "lme4::glmer") {
             fit <- fit_with_diagnostics(glmer(f, data = df, family = family,
-                                              control = glmerControl(optimizer = "bobyqa",
-                                                                     optCtrl = list(maxfun = 2e5))))
+                           control = glmerControl(optimizer = "bobyqa",
+                                                  optCtrl = list(maxfun = 2e5))))
             if (inherits(fit$result, "FlexibleGLMM_fit_error")) stop(fit$result$error)
             model <- fit$result
             fit_warnings <- fit$warnings
@@ -211,13 +225,13 @@ model_fit_server <- function(input, output, session, rv) {
             }
 
             if (!can_use_corr && cor_choice != "none") {
-              showNotification(
+              notify(
                 "Residual correlation disabled: insufficient repeated measures.",
                 type = "warning"
               )
             }
 
-            showNotification(
+            notify(
               paste("Correlation used:", corr_used),
               type = "message",
               duration = 4
@@ -245,7 +259,7 @@ model_fit_server <- function(input, output, session, rv) {
           results[[iv]] <- list(engine = input$engine, formula = f_str, model = model, anova = anova_tab, warnings = fit_warnings)
 
         }, error = function(e) {
-          results[[iv]] <- list(formula = f_str, error = e$message)
+          results[[iv]] <<- list(formula = f_str, error = e$message)
         })
       }
     }

@@ -4,6 +4,15 @@
 #**************************************************************
 
 #----------------------
+# Notifications are cosmetic: never let a failed/unsupported
+# notify() (e.g. under shiny::testServer()'s mock session, which
+# does not implement it) abort the calling observer.
+#----------------------
+notify <- function(...) {
+  tryCatch(shiny::showNotification(...), error = function(e) invisible(NULL))
+}
+
+#----------------------
 # Unwrap a fitted model object down to its underlying engine model
 # (afex::mixed wraps lme4 objects; lme4/nlme objects pass through)
 #----------------------
@@ -37,7 +46,7 @@ unwrap_model <- function(model) {
 # out of a formula string (used to build nlme fixed-effects formulas)
 #----------------------
 strip_lme4_random <- function(formula_string) {
-  gsub("\\+?\\s*\\([^\\)]*\\|[^\\)]*\\)", "", formula_string)
+  trimws(gsub("\\+?\\s*\\([^\\)]*\\|[^\\)]*\\)", "", formula_string))
 }
 
 #----------------------
@@ -73,6 +82,37 @@ check_convergence_flag <- function(model) {
   "OK"
 }
 
+#----------------------
+# Custom model equation: parse a user-typed FULL function call
+# (e.g. "nlme::lme(Reaction_time ~ Days, random = ~1|Subject,
+# weights = varIdent(form = ~1|Sex), method = 'REML')") and validate
+# it before it is ever evaluated.
+#
+# This intentionally does NOT depend on input$y, input$random_effects,
+# input$nlme_random/group_var/time_var/corStruct, input$family or
+# input$linkfun: the custom-equation box is a standalone power-user
+# path, decoupled from the structured sidebar, so any option the
+# underlying package exposes (weights=, offset=, control=, contrasts=,
+# na.action=, ...) can be used - not just the subset FlexibleGLMM has
+# a dropdown for.
+#
+# SECURITY: evaluating user-typed text as R code is a real code-
+# execution surface on a hosted, multi-user app. Two things are done
+# to constrain it as far as practical:
+#   1. Every function symbol anywhere in the parsed call tree - not
+#      just the outermost function - must appear in an explicit
+#      whitelist (check_call_safety()), so an argument subexpression
+#      like `weights = {system("..."); 1}` is rejected just as surely
+#      as calling a disallowed function directly.
+#   2. `data =` is always overwritten with the app's own working
+#      dataset after parsing, so the call can never be pointed at any
+#      other object, however the user wrote it.
+# This materially reduces risk but is not a full sandbox; R's
+# evaluation model has corners (replacement functions, S4 dispatch,
+# environment manipulation) that a hand-written whitelist of this kind
+# cannot guarantee to catch in every case.
+#----------------------
+
 ALLOWED_CUSTOM_CALL_FNS <- c(
   # model-fitting entry points
   "mixed", "glmer", "lmer", "lme",
@@ -81,7 +121,7 @@ ALLOWED_CUSTOM_CALL_FNS <- c(
   # families
   "gaussian", "Gamma", "binomial", "poisson", "inverse.gaussian",
   # nlme variance & correlation structures
-  "pdIdent","varIdent", "varPower", "varExp", "varConstPower", "varComb", "varFixed",
+  "varIdent", "varPower", "varExp", "varConstPower", "varComb", "varFixed",
   "corAR1", "corCompSymm", "corSymm", "corExp", "corGaus", "corLin", "corRatio", "corSpher", "corCAR1",
   # fitting controls
   "lmerControl", "glmerControl", "lmeControl", "nlmeControl",
@@ -149,12 +189,22 @@ parse_custom_model_call <- function(text) {
     NA_character_
   }
 
+  # A bare formula such as "y ~ x1 + x2" is itself a call (to `~`), so it
+  # passes is.call() above; give it the same helpful message as non-calls.
+  if (identical(fn_name, "~")) {
+    stop(
+      "Custom equation must be a full function call, e.g. ",
+      "nlme::lme(y ~ x, random = ~1|Subject, data = df) - a bare formula is not enough.",
+      call. = FALSE
+    )
+  }
+
   engine <- switch(fn_name,
-                   "mixed" = "afex::mixed",
-                   "glmer" = "lme4::glmer",
-                   "lmer"  = "lme4::lmer",
-                   "lme"   = "nlme::lme",
-                   NA_character_
+    "mixed" = "afex::mixed",
+    "glmer" = "lme4::glmer",
+    "lmer"  = "lme4::lmer",
+    "lme"   = "nlme::lme",
+    NA_character_
   )
 
   if (is.na(engine)) {
@@ -182,7 +232,7 @@ parse_custom_model_call <- function(text) {
 # differently - e.g. glmer's structured optinfo messages vs. plain
 # base warnings from afex/nlme). This lets FlexibleGLMM surface
 # convergence/boundary-fit warnings uniformly instead of relying on
-# each engine's own warning mechanism.
+# each engine's own warning mechanism (reviewer comments #45, A24).
 #
 # Returns list(result, warnings): on success, result is the fitted
 # model; on failure, result is a "FlexibleGLMM_fit_error" object
@@ -216,7 +266,7 @@ fit_with_diagnostics <- function(expr, model = NULL) {
 
 #----------------------
 # Positivity check for Gamma models with an identity link
-# A Gamma mean must be > 0, but an
+# (reviewer comment #7 / A9): a Gamma mean must be > 0, but an
 # identity-link linear predictor is not constrained to stay positive.
 #----------------------
 check_gamma_identity_positivity <- function(model, family_name, link_name) {
@@ -226,7 +276,7 @@ check_gamma_identity_positivity <- function(model, family_name, link_name) {
   fitted_vals <- tryCatch(stats::fitted(model), error = function(e) NULL)
   if (is.null(fitted_vals)) return(invisible(NULL))
   if (any(fitted_vals <= 0, na.rm = TRUE)) {
-    showNotification(
+    notify(
       paste0(
         "Warning: this Gamma (identity link) model has ",
         sum(fitted_vals <= 0, na.rm = TRUE),
@@ -242,6 +292,7 @@ check_gamma_identity_positivity <- function(model, family_name, link_name) {
 
 #----------------------
 # Number of subjects / observations used in a fitted model
+# (reviewer comments: Minor #19, A22)
 #----------------------
 get_n_subjects_obs <- function(model) {
   model_unwrapped <- unwrap_model(model)
