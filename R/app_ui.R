@@ -212,7 +212,6 @@ app_ui <- function(request) {
 
                        "- For family of distributions Refer- https://www.rdocumentation.org/packages/stats/versions/3.6.2/topics/family",br(),
 
-                       "- Custom equation format : y ~ x1 + x2",br(),
                        br(),
 
                        tags$b(style="color:#b5533f;", "Note:"),br(),
@@ -233,7 +232,10 @@ app_ui <- function(request) {
                      tags$img(src = "www/GLMM_Table.jpg",
                               width = "80%",
                               style = "border-radius:10px; box-shadow: 2px 2px 10px #ccc;")
-                   )
+                   ),
+                 hr(),
+                 h2("If you use this tool, please cite it as below."),
+                 p("Puneet Talwar, Fermin Balda Aizpurua, Christophe Phillips, & Gilles Vandewalle. (2026). FlexibleGLMM: A R Shiny Application for Comprehensive Generalized Linear Mixed Model Analysis, Diagnostics, and Visualization (Version 1.1.0) [Computer software]. https://doi.org/https://doi.org/10.5281/zenodo.21410757")
           ),
           tabPanel("Data", DTOutput("dataTable")),
           tabPanel("FitDist Output (Exploratory)",
