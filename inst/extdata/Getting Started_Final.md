@@ -189,7 +189,7 @@ Inspect the following tabs:
 
 ### 11\. Residual Diagnostics with DHARMa
 
-DHARMa evaluates simulated residuals from a fitted model, so it can only be run after model fitting, not as a preprocessing/outlier-screening step (Step 5).
+DHARMa evaluates simulated residuals from a fitted model(only for afex/lme4 models), so it can only be run after model fitting, not as a preprocessing/outlier-screening step (Step 5).
 
 1. Open the Diagnostics tab for the fitted model.
 2. Review the DHARMa residual plot (uniformity of scaled residuals, dispersion) and the accompanying test outputs.
