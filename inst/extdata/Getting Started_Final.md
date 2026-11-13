@@ -564,7 +564,7 @@ A related tutorial is available at
 ### Data characteristics
 
 The dataset contains repeated reaction-time measurements for subjects
-across days. `Reaction` is the continuous outcome, `Days` is the
+across days. `Reaction_time` is the continuous outcome, `Days` is the
 within-subject predictor, and `Subject` identifies the repeated-measures
 grouping factor.
 
@@ -572,7 +572,7 @@ grouping factor.
 
 ``` r
 model3 <- lme4::lmer(
-  Reaction ~ 1 + Days + (1 | Subject),
+  Reaction_time ~ 1 + Days + (1 | Subject),
   data = sleepstudy
 )
 summary(model3)
@@ -585,7 +585,7 @@ assumes a common Days slope across subjects.
 
 ``` r
 model4 <- lme4::lmer(
-  Reaction ~ 1 + Days + (1 + Days | Subject),
+  Reaction_time ~ 1 + Days + (1 + Days | Subject),
   data = sleepstudy
 )
 summary(model4)
@@ -709,11 +709,11 @@ comparison is available at:
 #### R models
 
 ``` r
-m1 <- lme4::lmer(Reaction ~ Days + (Days | Subject), data = sleepstudy)
+m1 <- lme4::lmer(Reaction_time ~ Days + (Days | Subject), data = sleepstudy)
 
-m2 <- afex::mixed(Reaction ~ Days + (Days || Subject), data = sleepstudy)
+m2 <- afex::mixed(Reaction_time ~ Days + (Days || Subject), data = sleepstudy)
 
-m3 <- lme(Reaction ~ Days, random = list(Subject = pdIdent(~ Days)), data = sleepstudy)
+m3 <- lme(Reaction_time ~ Days, random = list(Subject = pdIdent(~ Days)), data = sleepstudy)
 
 ```
 
